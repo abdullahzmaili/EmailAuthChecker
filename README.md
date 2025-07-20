@@ -9,7 +9,7 @@ Comprehensive PowerShell script for analyzing SPF, DKIM, and DMARC records with 
 
 ## 🔍 Overview
 
-Analyzes email authentication configurations for domains with detailed validation, actionable recommendations, and direct links to Microsoft documentation. **Version 1.0 features enhanced authoritative DNS server queries, comprehensive security analysis, and professional HTML reporting.**
+Analyzes email authentication configurations for domains with detailed validation, actionable recommendations, and direct links to Microsoft documentation. **Version 1.0 features enhanced authoritative DNS server queries, comprehensive security analysis with 21 checks, and professional HTML reporting with interactive charts.**
 
 ## ✨ Key Features
 
@@ -19,9 +19,9 @@ Analyzes email authentication configurations for domains with detailed validatio
 - Comprehensive TTL analysis across all protocols
 
 ### 📧 **Email Authentication Analysis**
-- **SPF (9 checks)**: Record presence, syntax, single record compliance, DNS lookups (≤10), length (≤255), TTL (≥3600s), all mechanism validation, macro security, sub-record TTL
+- **SPF (9 checks)**: Record presence, syntax, single record compliance, DNS lookups (≤10), length (≤255), TTL (≥3600s), SPF enforcement rule validation, macro security, sub-record TTL
 - **DKIM (5 checks)**: 10 selector discovery, comprehensive syntax validation, key status (ACTIVE/TESTING/REVOKED), strength analysis (≥1024 bits), TTL validation
-- **DMARC (7 checks)**: Record presence, policy assessment, reporting config, strong enforcement, subdomain policy, TTL validation, alignment modes
+- **DMARC (5 checks)**: Record presence, policy assessment, reporting config, alignment modes, TTL validation
 
 ### 📊 **Professional Reporting**
 - Interactive HTML reports with responsive design
@@ -36,6 +36,7 @@ Analyzes email authentication configurations for domains with detailed validatio
 - Multiple SPF record detection (RFC 7208 compliance)
 - DNS lookup optimization warnings
 - Key length analysis with upgrade recommendations
+- DMARC failure options analysis (fo= tag)
 - Authoritative DNS queries with fallback support
 
 ### 📚 **Microsoft Integration**
@@ -55,9 +56,27 @@ Analyzes email authentication configurations for domains with detailed validatio
 
 | Protocol | Checks | Key Validations |
 |----------|--------|----------------|
-| SPF | 9 | Syntax, lookups, TTL, macros, sub-records |
-| DMARC | 7 | Policy, reporting, alignment, subdomain |
+| SPF | 9 | Syntax, lookups, TTL, macros, sub-records, enforcement rule |
+| DMARC | 5 | Policy, reporting, alignment, TTL validation |
 | DKIM | 5 | Keys, syntax, strength, status, TTL |
+
+**Total Checks**: 19 comprehensive validations across all email authentication protocols
+
+## 📊 New Features in v1.0
+
+### SPF Enforcement Rule
+- Renamed from "All Mechanism" for better clarity
+- Detailed analysis of ?all, ~all, -all, +all mechanisms
+- Security impact assessment and recommendations
+
+### DMARC Failure Options
+- NEW: Analysis of fo= tag (failure reporting options)
+- Supports values: 0 (default), 1, d, s
+- Detailed descriptions for each option:
+  - `0`: Generate report only if both SPF and DKIM fail to align
+  - `1`: Generate report if either SPF or DKIM fails to align  
+  - `d`: Generate report if DKIM fails to align (regardless of SPF)
+  - `s`: Generate report if SPF fails to align (regardless of DKIM)
 
 ## 📁 Output
 
@@ -82,8 +101,9 @@ Analyzes email authentication configurations for domains with detailed validatio
 - **Current Version**: 1.0
 - **Author**: Abdullah Zmaili 
 - **Date Created**: July 16, 2025
-- **Total Checks**: 21 comprehensive validations
-- **Features**: Enhanced DNS resolution, security analysis, interactive reporting
+- **Last Updated**: July 20, 2025
+- **Total Checks**: 19 comprehensive validations
+- **Features**: Enhanced DNS resolution, security analysis, interactive reporting, DMARC failure options analysis
 
 ---
 *For support or questions, please open an issue on GitHub.*

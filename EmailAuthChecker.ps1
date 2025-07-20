@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-    Comprehensive email authentication analysis tool for SPF, DKIM, and DMARC records with Microsoft documentation integration.
+    Comprehensive email authentication analysis tool for SPF, DKIM, and DMARC records with Microsoft documentation integration and enhanced security analysis.
 
 .DISCLAIMER
     This script has been thoroughly tested across various environments and scenarios, and all tests have passed successfully. However, by using this script, you acknowledge and agree that:
@@ -10,16 +10,23 @@
 
 .DESCRIPTION
     The Email Authentication Checker analyzes email authentication configurations for domains, providing detailed validation of SPF, DKIM, and DMARC records. 
-    The tool performs comprehensive security checks including DNS lookup validation, TTL analysis, macro security assessment, and syntax validation.
+    The tool performs comprehensive security checks including DNS lookup validation, TTL analysis, macro security assessment, syntax validation, SPF enforcement rule analysis, and DMARC failure options evaluation.
     It generates professional HTML reports with interactive visualizations and provides actionable recommendations with direct links to Microsoft's 
     official documentation. Enhanced with authoritative DNS server queries for accurate TTL validation and record retrieval.
+    
+    Features 19 comprehensive security checks:
+    - SPF (9 checks): Record presence, syntax, single record compliance, DNS lookups, length validation, TTL analysis, SPF enforcement rule, macro security, sub-record TTL
+    - DMARC (5 checks): Record presence, policy assessment, reporting configuration, alignment modes, TTL validation  
+    - DKIM (5 checks): Selector discovery, syntax validation, key status analysis, strength assessment, TTL validation
 
 .NOTES
-    File Name      : EmailAuthChecker_V1.0.ps1
+    File Name      : EmailAuthChecker.ps1
     Author         : Abdullah Zmaili
     Version        : 1.0
-    Date Created   : 2025-June-16
+    Date Created   : 2025-July-16
+    Date Updated   : 2025-July-20
     Prerequisite   : PowerShell 5.1 or later, Administrator privileges for some checks
+    Total Checks   : 19 comprehensive validations across all email authentication protocols
 #>
 
 # Email Authentication Checker with Microsoft Documentation Integration
@@ -136,8 +143,6 @@ function Get-Recommendation {
                 return "Configure DMARC reporting (rua/ruf) - Microsoft DMARC Reports: $($script:MSURLs.DMARCReports)"
             } elseif ($Issue -like "*subdomain policy*weaker*") {
                 return "Strengthen subdomain policy to match or exceed main policy - Weak subdomain policies can be exploited - Microsoft DMARC Best Practices: $($script:MSURLs.DMARCPolicies)"
-            } elseif ($Issue -like "*Both SPF and DKIM use relaxed alignment*") {
-                return "Consider implementing strict alignment (aspf=s or adkim=s) for enhanced security - Strict alignment provides better protection against spoofing - Microsoft DMARC Implementation: $($script:MSURLs.DMARCImplementation)"
             } elseif ($Issue -like "*Invalid*alignment*") {
                 return "Fix DMARC alignment mode syntax - Valid values are 'r' (relaxed) or 's' (strict) - Microsoft DMARC Configuration: $($script:MSURLs.DMARCSetup)"
             } elseif ($Issue -like "*Invalid subdomain policy*") {
@@ -1099,6 +1104,66 @@ Show-Banner
 $commonSelectors = @("default", "selector1", "selector2", "google", "gmail", "k1", "k2", "dkim", "mail", "email", "s1", "s2", "smtpapi", "amazonses", "mandrill", "mailgun", "pm", "zendesk1", "mxvault")
 
 # Results storage
+# Function to validate domain name format
+function Test-DomainFormat {
+    param(
+        [string]$DomainName,
+        [string]$Context = "domain"
+    )
+    
+    # Check for invalid characters based on context
+    $invalidChars = @()
+    
+    if ($Context -eq "single") {
+        # For single domain analysis, comma and semicolon are not allowed
+        $invalidChars = @(',', ';')
+        $invalidPattern = '[,;]'
+    }
+    elseif ($Context -eq "multiple") {
+        # For multiple domain analysis, semicolon, backslash, and forward slash are not allowed
+        $invalidChars = @(';', '\', '/')
+        $invalidPattern = '[;\\\/]'
+    }
+    
+    # Check for invalid characters
+    if ($DomainName -match $invalidPattern) {
+        $foundChars = @()
+        foreach ($char in $invalidChars) {
+            if ($DomainName.Contains($char)) {
+                $foundChars += "'$char'"
+            }
+        }
+        
+        Write-Host ""
+        Write-Host "ERROR: Invalid characters detected in domain input!" -ForegroundColor Red
+        Write-Host "Found invalid character(s): $($foundChars -join ', ')" -ForegroundColor Yellow
+        
+        if ($Context -eq "single") {
+            Write-Host ""
+            Write-Host "For Single Domain Analysis:" -ForegroundColor Cyan
+            Write-Host "  - Use only valid domain characters (letters, numbers, dots, hyphens)" -ForegroundColor White
+            Write-Host "  - Example: example.com" -ForegroundColor Green
+            Write-Host "  - Do NOT use commas (,) or semicolons (;)" -ForegroundColor Red
+            Write-Host ""
+            Write-Host "If you want to analyze multiple domains, please select option [2] instead." -ForegroundColor Yellow
+        }
+        elseif ($Context -eq "multiple") {
+            Write-Host ""
+            Write-Host "For Multiple Domain Analysis:" -ForegroundColor Cyan
+            Write-Host "  - Separate domains with commas (,) only" -ForegroundColor White
+            Write-Host "  - Example: example.com,contoso.com,microsoft.com" -ForegroundColor Green
+            Write-Host "  - Do NOT use semicolons (;), backslashes (\), or forward slashes (/)" -ForegroundColor Red
+        }
+        
+        Write-Host ""
+        Write-Host "Please restart the script and enter valid domain names." -ForegroundColor Yellow
+        Write-Host "============================================" -ForegroundColor Cyan
+        return $false
+    }
+    
+    return $true
+}
+
 $allResults = @()
 
 # Check each domain
@@ -1116,10 +1181,22 @@ $menuChoice = Read-Host "Please select an option (1, 2, or 3)"
 switch ($menuChoice) {
     '1' {
         $domain = Read-Host "Enter the domain name to analyze (e.g., example.com)"
+        
+        # Validate single domain input for invalid characters
+        if (-not (Test-DomainFormat -DomainName $domain -Context "single")) {
+            exit 1
+        }
+        
         $domains = @($domain.Trim())
     }
     '2' {
         $domainList = Read-Host "Enter domains separated by commas (e.g., example.com,contoso.com)"
+        
+        # Validate multiple domain input for invalid characters
+        if (-not (Test-DomainFormat -DomainName $domainList -Context "multiple")) {
+            exit 1
+        }
+        
         $domains = $domainList -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ }
     }
     '3' {
@@ -1174,6 +1251,9 @@ foreach ($domain in $domains) {
         DMARCSubdomainPolicy = ""  # sp= tag
         DMARCSPFAlignment = ""     # aspf= tag
         DMARCDKIMAlignment = ""    # adkim= tag
+        DMARCFailureOptions = ""   # fo= tag (failure reporting options)
+        DMARCVersion = ""          # v= tag
+        DMARCPercentage = ""       # pct= tag
         DMARCTTL = 0
         DMARCIssues = @()
         DKIMFound = $false
@@ -1391,6 +1471,34 @@ foreach ($domain in $domains) {
             Write-Host "        DKIM Alignment: relaxed (r) - default" -ForegroundColor Gray
         }
         
+        # Extract failure reporting options (fo=)
+        if ($result.DMARCRecord -match "fo=([01ds])") {
+            $result.DMARCFailureOptions = $matches[1]
+            Write-Host "        Failure Options: $($matches[1])" -ForegroundColor Cyan
+        } else {
+            # Default is 0 if not specified
+            $result.DMARCFailureOptions = "0"
+            Write-Host "        Failure Options: 0 (default)" -ForegroundColor Gray
+        }
+        
+        # Extract DMARC version (v=)
+        if ($result.DMARCRecord -match "v=([^;]+)") {
+            $result.DMARCVersion = $matches[1].Trim()
+            Write-Host "        Protocol Version: $($result.DMARCVersion)" -ForegroundColor Cyan
+        } else {
+            $result.DMARCVersion = "Unknown"
+        }
+        
+        # Extract percentage of messages subjected to filtering (pct=)
+        if ($result.DMARCRecord -match "pct=(\d+)") {
+            $result.DMARCPercentage = $matches[1]
+            Write-Host "        Percentage of messages filtered: $($result.DMARCPercentage)%" -ForegroundColor Cyan
+        } else {
+            # Default is 100% if not specified
+            $result.DMARCPercentage = "100"
+            Write-Host "        Percentage of messages filtered: 100% (default)" -ForegroundColor Gray
+        }
+        
         # Check DMARC issues
         if ($result.DMARCPolicy -eq "none") {
             $result.DMARCIssues += "Policy is 'none' (monitoring only)"
@@ -1417,11 +1525,6 @@ foreach ($domain in $domains) {
             $result.DMARCIssues += "Invalid DKIM alignment mode: '$($result.DMARCDKIMAlignment)' (valid: r=relaxed, s=strict)"
         }
         
-        # Security recommendations for alignment
-        if ($result.DMARCSPFAlignment -eq "r" -and $result.DMARCDKIMAlignment -eq "r") {
-            $result.DMARCIssues += "Both SPF and DKIM use relaxed alignment - consider strict alignment for enhanced security"
-        }
-        
         if ($result.DMARCRecord -notmatch "rua=") {
             $result.DMARCIssues += "No reporting email configured"
         }
@@ -1445,6 +1548,9 @@ foreach ($domain in $domains) {
         $result.DMARCSubdomainPolicy = "Missing"
         $result.DMARCSPFAlignment = "Missing"
         $result.DMARCDKIMAlignment = "Missing"
+        $result.DMARCFailureOptions = "Missing"
+        $result.DMARCVersion = "Missing"
+        $result.DMARCPercentage = "Missing"
         $result.DMARCTTL = 0
     }
       # CHECK DKIM RECORDS
@@ -1813,30 +1919,24 @@ function Get-ProtocolCheckPercentage {
         "DMARC" {
             if (-not $result.DMARCFound) { return 0 }
             
-            $totalChecks = 7  # Updated from 4 to 7 checks
+            $totalChecks = 5  # Updated from 6 to 5 checks (removed policy not none check)
             $passedChecks = 0
             
             # Check 1: DMARC Present
             if ($result.DMARCFound) { $passedChecks++ }
             
-            # Check 2: Policy not 'none'
-            if ($result.DMARCPolicy -ne "none") { $passedChecks++ }
-            
-            # Check 3: Reporting configured
+            # Check 2: Reporting configured
             if ($result.DMARCRecord -match "rua=") { $passedChecks++ }
             
-            # Check 4: Strong policy (quarantine or reject)
+            # Check 3: Strong policy (quarantine or reject)
             if ($result.DMARCPolicy -eq "quarantine" -or $result.DMARCPolicy -eq "reject") { $passedChecks++ }
             
-            # Check 5: Subdomain policy is not weaker than main policy
+            # Check 4: Subdomain policy is not weaker than main policy
             $policyStrength = @{ "none" = 0; "quarantine" = 1; "reject" = 2; "Missing" = -1 }
             if ($result.DMARCSubdomainPolicy -ne "Missing" -and $result.DMARCPolicy -ne "Missing" -and $policyStrength[$result.DMARCSubdomainPolicy] -ge $policyStrength[$result.DMARCPolicy]) { $passedChecks++ }
             
-            # Check 6: TTL >= 3600 seconds
+            # Check 5: TTL >= 3600 seconds
             if ($result.DMARCTTL -ge 3600) { $passedChecks++ }
-            
-            # Check 7: At least one alignment mode is strict (enhanced security)
-            if ($result.DMARCSPFAlignment -eq "s" -or $result.DMARCDKIMAlignment -eq "s") { $passedChecks++ }
             
             return [math]::Round(($passedChecks / $totalChecks) * 100, 0)
         }
@@ -2018,17 +2118,12 @@ function Get-ProtocolCheckDetails {
                 Color = if($result.DMARCFound) { "#007bff" } else { "#dc3545" }
             }
             $checks += @{
-                Name = "Policy Not None"
-                Passed = ($result.DMARCFound -and $result.DMARCPolicy -ne "none")
-                Color = if($result.DMARCFound -and $result.DMARCPolicy -ne "none") { "#007bff" } else { "#dc3545" }
-            }
-            $checks += @{
                 Name = "Reporting Configured"
                 Passed = ($result.DMARCFound -and $result.DMARCRecord -match "rua=")
                 Color = if($result.DMARCFound -and $result.DMARCRecord -match "rua=") { "#007bff" } else { "#dc3545" }
             }
             $checks += @{
-                Name = "Strong Policy"
+                Name = "Strong Policy (quarantine or reject)"
                 Passed = ($result.DMARCFound -and ($result.DMARCPolicy -eq "quarantine" -or $result.DMARCPolicy -eq "reject"))
                 Color = if($result.DMARCFound -and ($result.DMARCPolicy -eq "quarantine" -or $result.DMARCPolicy -eq "reject")) { "#007bff" } else { "#dc3545" }
             }
@@ -2041,11 +2136,6 @@ function Get-ProtocolCheckDetails {
                 Name = "TTL >= 3600"
                 Passed = ($result.DMARCFound -and $result.DMARCTTL -ge 3600)
                 Color = if($result.DMARCFound -and $result.DMARCTTL -ge 3600) { "#007bff" } else { "#dc3545" }
-            }
-            $checks += @{
-                Name = "Strict Alignment"
-                Passed = ($result.DMARCFound -and ($result.DMARCSPFAlignment -eq "s" -or $result.DMARCDKIMAlignment -eq "s"))
-                Color = if($result.DMARCFound -and ($result.DMARCSPFAlignment -eq "s" -or $result.DMARCDKIMAlignment -eq "s")) { "#007bff" } else { "#dc3545" }
             }
         }
         
@@ -2881,7 +2971,6 @@ $html = @"
                 'TTL >= 3600': 'Minimum recommended TTL for DNS stability',
                 'Strict All Mechanism': 'Uses ~all or -all for proper email protection',
                 'Syntax Valid': 'Record follows correct syntax standards',
-                'Policy Not None': 'DMARC policy should enforce actions (not just monitor)',
                 'Reporting Configured': 'RUA/RUF tags configured for DMARC reporting',
                 'Strong Policy': 'Uses quarantine or reject policy for security',
                 'Keys Active': 'DKIM keys are active and not revoked',
@@ -3071,7 +3160,7 @@ foreach ($result in $allResults) {
             <div class="protocol-summary-bar">
                 <div class="summary-item">
                     <span class="summary-label">Total Checks:</span>
-                    <span class="summary-value">21</span>
+                    <span class="summary-value">19</span>
                 </div>
                 <div class="summary-item">
                     <span class="summary-label">Passed:</span>
@@ -3149,14 +3238,15 @@ $(if($result.SPFSubRecordsTTLValues -and $result.SPFSubRecordsTTLValues.Count -g
                         </div>"
 })
                         <div class="detail-item">
-                            <span class="detail-label">All Mechanism:</span>
+                            <span class="detail-label">SPF Enforcement Rule:</span>
                             <span class="detail-value">$(
-                                if(-not $result.SPFFound) { 'Missing' } else {
+                                if(-not $result.SPFFound) { 
+                                    'Missing' 
+                                } else {
                                     switch ($result.SPFAllMechanism) {
-                                        '+all' { '+all (CRITICAL - allows any server)' }
-                                        '?all' { '?all (WEAK - neutral protection)' }
-                                        '~all' { '~all (GOOD - soft fail)' }
-                                        '-all' { '-all (STRICT - hard fail)' }
+                                        '?all' { '?all (WEAK - Neutral: Pass or fail, no specific action on messages from unidentified senders)' }
+                                        '~all' { '~all (GOOD - Soft Fail: Emails not from unauthorized senders will be accepted but marked [depends on the destination email system])' }
+                                        '-all' { '-all (STRICT - Hard Fail: Emails from authorized senders will be accepted only)'}
                                         'Missing' { 'Missing' }
                                         '' { 'MISSING (incomplete policy)' }
                                         default { $result.SPFAllMechanism }
@@ -3208,11 +3298,11 @@ $((Get-ProtocolCheckDetails $result "DMARC") | ForEach-Object {
                     <div class="protocol-details" id="dmarc-details-$domainId" style="display: none;">
                         <div class="detail-item">
                             <span class="detail-label">Policy:</span>
-                            <span class="detail-value">$($result.DMARCPolicy)</span>
+                            <span class="detail-value">$(if($result.DMARCPolicy) { (Get-Culture).TextInfo.ToTitleCase($result.DMARCPolicy.ToLower()) } else { $result.DMARCPolicy })</span>
                         </div>
                         <div class="detail-item">
                             <span class="detail-label">Subdomain Policy:</span>
-                            <span class="detail-value">$(if($result.DMARCSubdomainPolicy -eq $result.DMARCPolicy) { "$($result.DMARCSubdomainPolicy) (inherited)" } else { $result.DMARCSubdomainPolicy })</span>
+                            <span class="detail-value">$(if($result.DMARCSubdomainPolicy -eq $result.DMARCPolicy) { "$(if($result.DMARCSubdomainPolicy) { (Get-Culture).TextInfo.ToTitleCase($result.DMARCSubdomainPolicy.ToLower()) } else { $result.DMARCSubdomainPolicy }) (inherited)" } else { if($result.DMARCSubdomainPolicy) { (Get-Culture).TextInfo.ToTitleCase($result.DMARCSubdomainPolicy.ToLower()) } else { $result.DMARCSubdomainPolicy } })</span>
                         </div>
                         <div class="detail-item">
                             <span class="detail-label">SPF Alignment:</span>
@@ -3221,6 +3311,19 @@ $((Get-ProtocolCheckDetails $result "DMARC") | ForEach-Object {
                         <div class="detail-item">
                             <span class="detail-label">DKIM Alignment:</span>
                             <span class="detail-value">$(if($result.DMARCDKIMAlignment -eq 'r') { 'Relaxed (r)' } elseif($result.DMARCDKIMAlignment -eq 's') { 'Strict (s)' } else { $result.DMARCDKIMAlignment })</span>
+                        </div>
+                        <div class="detail-item">
+                            <span class="detail-label">Failure Options:</span>
+                            <span class="detail-value">$(
+                                switch ($result.DMARCFailureOptions) {
+                                    '0' { '0 (Default: Generate report only if both SPF and DKIM fail to align)' }
+                                    '1' { '1 (Generate report if either SPF or DKIM fails to align)' }
+                                    'd' { 'd (Generate report if DKIM fails to align, regardless of SPF)' }
+                                    's' { 's (Generate report if SPF fails to align, regardless of DKIM)' }
+                                    'Missing' { 'Missing' }
+                                    default { $result.DMARCFailureOptions }
+                                }
+                            )</span>
                         </div>
                         <div class="detail-item">
                             <span class="detail-label">Reporting:</span>
@@ -3233,6 +3336,14 @@ $((Get-ProtocolCheckDetails $result "DMARC") | ForEach-Object {
                         <div class="detail-item">
                             <span class="detail-label">TTL:</span>
                             <span class="detail-value">$(if($result.DMARCTTL -gt 0) { "$($result.DMARCTTL)s" } else { 'Not Available' })</span>
+                        </div>
+                        <div class="detail-item">
+                            <span class="detail-label">Protocol Version:</span>
+                            <span class="detail-value">$(if($result.DMARCVersion -ne 'Missing') { $result.DMARCVersion } else { 'Not Available' })</span>
+                        </div>
+                        <div class="detail-item">
+                            <span class="detail-label">Percentage of messages subjected to filtering:</span>
+                            <span class="detail-value">$(if($result.DMARCPercentage -ne 'Missing') { "$($result.DMARCPercentage)%" } else { 'Not Available' })</span>
                         </div>
                         <div class="detail-item" style="flex-direction: column; align-items: flex-start;">
                             <span class="detail-label">DMARC Record:</span>
@@ -3378,45 +3489,6 @@ $(if($result.DKIMProviders -and $result.DKIMProviders.Detected.Count -gt 0) {
             </div>
         </div>
             
-            <div style="margin-top: 20px; padding: 15px; background: #f8f9fa; border-radius: 8px;">
-                <h4 style="margin: 0 0 10px 0; color: #495057;">Check Details:</h4>
-                <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 15px; font-size: 12pt; line-height: 1.5;">
-                    <div>
-                        <strong style="color: #28a745;">SPF Checks (9 total):</strong>
-                        <ul style="margin: 5px 0 0 15px; padding: 0;">
-                            <li>Record Present</li>
-                            <li>Single Record</li>
-                            <li>Macro Security (safe macro usage)</li>
-                            <li>TTL Sub-Records (A/MX records TTL &ge;3600s)</li>
-                            <li>DNS Lookups &lt; 10</li>
-                            <li>Record Length &lt; 255 chars</li>
-                            <li>TTL &ge;3600 seconds</li>
-                            <li>Strict All Mechanism (~all or -all)</li>
-                            <li>Valid Syntax</li>
-                        </ul>
-                    </div>
-                    <div>
-                        <strong style="color: #007bff;">DMARC Checks (7 total):</strong>
-                        <ul style="margin: 5px 0 0 15px; padding: 0;">
-                            <li>Record Present</li>
-                            <li>Policy Not 'none'</li>
-                            <li>Reporting Configured (rua)</li>
-                            <li>Strong Policy (quarantine/reject)</li>
-                            <li>Subdomain Policy (sp)</li>
-                            <li>SPF Alignment Mode (aspf)</li>
-                            <li>DKIM Alignment Mode (adkim)</li>
-                        </ul>
-                    </div>
-                    <div>
-                        <strong style="color:rgb(176, 7, 255);">DKIM Checks (4 total):</strong>
-                        <ul style="margin: 5px 0 0 15px; padding: 0;">
-                            <li>Record Present</li>
-                            <li>Valid Syntax</li>
-                            <li>Active Keys (not revoked)</li>
-                            <li>Strong Key Lengths (&ge;1024 bits)</li>
-                        </ul>                    </div>
-                </div>
-            </div>
         </div>
 "@
         

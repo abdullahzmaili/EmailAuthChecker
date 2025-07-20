@@ -1,14 +1,15 @@
 # Email Authentication Checker Tool Instructions
 
 ## Overview
-Comprehensive PowerShell tool for analyzing SPF, DKIM, and DMARC records with Microsoft documentation integration and enhanced DNS server queries.
+Comprehensive PowerShell tool for analyzing SPF, DKIM, and DMARC records with Microsoft documentation integration and enhanced DNS server queries. Features 22 security validations across all email authentication protocols.
 
 ## Features
-- SPF validation (9 checks): syntax, lookups, TTL, macros, sub-records
+- SPF validation (9 checks): syntax, lookups, TTL, macros, sub-records, enforcement rule
 - DKIM analysis (5 checks): syntax, key strength, status, TTL validation  
-- DMARC verification (7 checks): policy, reporting, alignment, subdomain
+- DMARC verification (5 checks): policy, reporting, alignment, TTL validation
 - Interactive HTML reports with copy-to-clipboard functionality
 - Authoritative DNS queries for accurate TTL validation
+- Service provider detection for DKIM configurations
 
 ## Requirements
 - PowerShell 5.1+
@@ -24,11 +25,29 @@ Comprehensive PowerShell tool for analyzing SPF, DKIM, and DMARC records with Mi
 
 ## Analysis Details
 
-**SPF (9 checks)**: Record presence, syntax, single record compliance, DNS lookups (≤10), length (≤255 chars), TTL (≥3600s), all mechanism, macro security, sub-record TTL
+**SPF (9 checks)**: Record presence, syntax, single record compliance, DNS lookups (≤10), length (≤255 chars), TTL (≥3600s), SPF enforcement rule (?all, ~all, -all, +all), macro security, sub-record TTL
 
-**DMARC (7 checks)**: Record presence, policy strength, reporting config, strong enforcement, subdomain policy, TTL, alignment modes
+**DMARC (5 checks)**: Record presence, policy strength, reporting config, alignment modes, TTL validation
 
 **DKIM (5 checks)**: Key discovery (10 selectors), syntax validation, key status, strength analysis (≥1024 bits), TTL validation
+
+## New Features
+
+### SPF Enforcement Rule Analysis
+- Renamed from "All Mechanism" for better user understanding
+- Comprehensive analysis of enforcement actions:
+  - `?all`: WEAK - Neutral (Pass or fail, no specific action)
+  - `~all`: GOOD - Soft Fail (Emails marked but accepted)
+  - `-all`: STRICT - Hard Fail (Only authorized senders accepted)
+  - `+all`: CRITICAL - Allows any server (major security risk)
+
+### DMARC Failure Options
+- NEW: Complete analysis of fo= tag values
+- Supported values and descriptions:
+  - `0` (Default): Generate report only if both SPF and DKIM fail to align
+  - `1`: Generate report if either SPF or DKIM fails to align
+  - `d`: Generate report if DKIM fails to align (regardless of SPF)
+  - `s`: Generate report if SPF fails to align (regardless of DKIM)
 
 ## Scoring
 - **90-100**: Excellent - All properly configured
@@ -43,9 +62,9 @@ Comprehensive PowerShell tool for analyzing SPF, DKIM, and DMARC records with Mi
 
 ## Support
 - Author: Abdullah Zmaili
-- Version: 1.0 | July 16, 2025
+- Version: 1.0 | July 16, 2025 | Updated: July 20, 2025
 - PowerShell: 5.1+ required
-- Total Checks: 21 comprehensive validations
+- Total Checks: 19 comprehensive validations
 
 ## Disclaimer
-Use at your own risk. Author not liable for any outcomes.
+This tool is provided for educational and diagnostic purposes only. The author makes no warranties regarding accuracy, completeness, or fitness for any particular purpose. Users should verify all findings independently and consult with email security professionals before making production changes. The tool performs read-only DNS queries and does not modify any domain configurations. Use at your own risk. Author not liable for any outcomes.
