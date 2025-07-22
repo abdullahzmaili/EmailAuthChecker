@@ -1094,17 +1094,6 @@ function Resolve-DnsNameAuthoritative {
     return $results
 }
 
-
-# Show enhanced banner at script start
-Show-Banner
-
-
-
-# Common DKIM selectors to check - expanded list for better detection
-$commonSelectors = @("default", "selector1", "selector2", "google", "gmail", "k1", "k2", "dkim", "mail", "email", "s1", "s2", "smtpapi", "amazonses", "mandrill", "mailgun", "pm", "zendesk1", "mxvault")
-
-# Results storage
-# Function to validate domain name format
 function Test-DomainFormat {
     param(
         [string]$DomainName,
@@ -1164,715 +1153,8 @@ function Test-DomainFormat {
     return $true
 }
 
-$allResults = @()
 
-# Check each domain
-### --- Simple User Interface Menu --- ###
-Write-Host "============================================" -ForegroundColor Cyan
-Write-Host "      Email Authentication Checker" -ForegroundColor Cyan
-Write-Host "============================================" -ForegroundColor Cyan
-Write-Host "[1] Single Domain Analysis"
-
-Write-Host "[2] Multiple Domain Analysis"
-Write-Host "[3] Load Domains from File (.txt)"
-
-$menuChoice = Read-Host "Please select an option (1, 2, or 3)"
-
-switch ($menuChoice) {
-    '1' {
-        $domain = Read-Host "Enter the domain name to analyze (e.g., example.com)"
-        
-        # Validate single domain input for invalid characters
-        if (-not (Test-DomainFormat -DomainName $domain -Context "single")) {
-            exit 1
-        }
-        
-        $domains = @($domain.Trim())
-    }
-    '2' {
-        $domainList = Read-Host "Enter domains separated by commas (e.g., example.com,contoso.com)"
-        
-        # Validate multiple domain input for invalid characters
-        if (-not (Test-DomainFormat -DomainName $domainList -Context "multiple")) {
-            exit 1
-        }
-        
-        $domains = $domainList -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ }
-    }
-    '3' {
-        $filePath = Read-Host "Enter the full path to the .txt file containing domains (one per line)"
-        if (-not (Test-Path -Path $filePath)) {
-            Write-Host "File not found: $filePath" -ForegroundColor Red
-            exit
-        }
-        $domains = Get-Content -Path $filePath | ForEach-Object { $_.Trim() } | Where-Object { $_ }
-        if (-not $domains -or $domains.Count -eq 0) {
-            Write-Host "No domains found in the file. Exiting..." -ForegroundColor Red
-            exit
-        }
-    }
-    default {
-        Write-Host "Invalid option. Exiting..." -ForegroundColor Red
-        exit
-    }
-}
-
-foreach ($domain in $domains) {
-    Write-Host "Analyzing domain: $domain" -ForegroundColor Yellow
-    Write-Host "-" * 50 -ForegroundColor DarkGray
-    
-    # Get authoritative servers for this domain
-    $authServers = Get-AuthoritativeDNSServers $domain
-    if ($authServers.Count -gt 0) {
-        Write-Host "    Authoritative DNS servers found:" -ForegroundColor Gray
-        foreach ($server in $authServers) {
-            Write-Host "      - $($server.NameHost) ($($server.IPAddress))" -ForegroundColor Gray
-        }
-    } else {
-        Write-Host "    No authoritative DNS servers found, using default resolvers" -ForegroundColor Yellow
-    }
-    Write-Host ""
-    
-    # Initialize result object
-    $result = [PSCustomObject]@{
-        Domain = $domain
-        SPFFound = $false
-        SPFRecord = ""
-        SPFIssues = @()
-        SPFDNSLookups = 0
-        SPFRecordLength = 0
-        SPFTTL = 0
-        SPFAllMechanism = ""
-        SPFSyntaxValid = $true
-        SPFSyntaxIssues = @()
-        DMARCFound = $false
-        DMARCRecord = ""
-        DMARCPolicy = ""
-        DMARCSubdomainPolicy = ""  # sp= tag
-        DMARCSPFAlignment = ""     # aspf= tag
-        DMARCDKIMAlignment = ""    # adkim= tag
-        DMARCFailureOptions = ""   # fo= tag (failure reporting options)
-        DMARCVersion = ""          # v= tag
-        DMARCPercentage = ""       # pct= tag
-        DMARCTTL = 0
-        DMARCIssues = @()
-        DKIMFound = $false
-        DKIMSelectors = @()
-        DKIMRecords = @{}  # Dictionary to store selector -> record mapping
-        DKIMAllMechanisms = @{}  # Dictionary to store selector -> all mechanism mapping
-        DKIMKeyLengths = @{}  # Dictionary to store selector -> key length info mapping
-        DKIMTTL = @{}  # Dictionary to store selector -> TTL mapping
-        DKIMTTLIssues = @{}  # Dictionary to store selector -> TTL issues mapping
-        DKIMSyntaxValid = $true
-        DKIMSyntaxIssues = @{}  # Dictionary to store selector -> issues mapping
-        SPFMultipleRecordsCheck = $true  # New check for multiple SPF records
-        SPFMacroSecurityCheck = $true  # New check for SPF macro security
-        SPFSubRecordsTTLCheck = $true  # New check for TTL of sub-records (A/MX records referenced in SPF)
-        SPFSubRecordsTTLValues = @{}  # Dictionary to store domain -> TTL values for A/MX records referenced in SPF
-        Score = 0
-        Status = ""
-        Recommendations = @()
-    }
-    
-    # CHECK SPF RECORD
-    Write-Host "  [1/3] Checking SPF record..." -ForegroundColor White
-    
-    # First, check for multiple SPF records (RFC violation)
-    $multipleSPFIssues = Test-MultipleSPFRecords $domain
-    if ($multipleSPFIssues.Count -gt 0) {
-        $result.SPFMultipleRecordsCheck = $false
-        foreach ($issue in $multipleSPFIssues) {
-            $result.SPFIssues += $issue
-        }
-        Write-Host "        Multiple SPF records detected - RFC violation!" -ForegroundColor Red
-        foreach ($issue in $multipleSPFIssues) {
-            if ($issue -like "SPF Record*") {
-                Write-Host "        $issue" -ForegroundColor Yellow
-            }
-        }
-    } else {
-        $result.SPFMultipleRecordsCheck = $true
-        Write-Host "        Single SPF record compliance: PASSED" -ForegroundColor Green
-    }
-    
-    # Query SPF record from authoritative servers
-    $authServers = Get-AuthoritativeDNSServers $domain
-    $spfTxtRecords = Resolve-DnsNameAuthoritative -Name $domain -Type TXT -AuthoritativeServers $authServers
-    $spfRecord = $spfTxtRecords | Where-Object {$_.Strings -like "v=spf*"} | Select-Object -First 1
-    
-    if ($spfRecord) {
-        $result.SPFFound = $true
-        $result.SPFRecord = $spfRecord.Strings -join ""
-        $result.SPFTTL = $spfRecord.TTL
-        Write-Host "        SPF record found" -ForegroundColor Green
-        
-        # Extract and analyze SPF all mechanism
-        $allMechanism = Get-SPFAllMechanism $result.SPFRecord
-        $result.SPFAllMechanism = $allMechanism
-        
-        # Check SPF all mechanism issues with detailed analysis
-        if ($allMechanism -eq "+all") {
-            $result.SPFIssues += "Uses '+all' (allows any server) - CRITICAL SECURITY RISK"
-            Write-Host "        All Mechanism: +all (CRITICAL - allows any server)" -ForegroundColor Red
-        } elseif ($allMechanism -eq "?all") {
-            $result.SPFIssues += "Uses '?all' (neutral/weak protection) - provides minimal security"
-            Write-Host "        All Mechanism: ?all (WEAK - neutral protection)" -ForegroundColor Yellow
-        } elseif ($allMechanism -eq "~all") {
-            Write-Host "        All Mechanism: ~all (GOOD - soft fail recommended)" -ForegroundColor Green
-        } elseif ($allMechanism -eq "-all") {
-            Write-Host "        All Mechanism: -all (STRICT - hard fail)" -ForegroundColor Green
-        } elseif ([string]::IsNullOrEmpty($allMechanism)) {
-            $result.SPFIssues += "Missing 'all' mechanism - SPF policy incomplete"
-            Write-Host "        All Mechanism: MISSING (policy incomplete)" -ForegroundColor Red
-        } else {
-            $result.SPFIssues += "Unknown 'all' mechanism format: $allMechanism"
-            Write-Host "        All Mechanism: $allMechanism (UNKNOWN format)" -ForegroundColor Yellow
-        }
-        
-        # Check SPF record length (RFC 7208 - DNS TXT record limit is 255 characters)
-        $result.SPFRecordLength = $result.SPFRecord.Length
-        if ($result.SPFRecordLength -gt 255) {
-            $result.SPFIssues += "Record too long ($($result.SPFRecordLength) characters) - exceeds 255 character limit"
-            Write-Host "        Record Length: $($result.SPFRecordLength) characters (EXCEEDS LIMIT)" -ForegroundColor Red
-        } elseif ($result.SPFRecordLength -gt 200) {
-            $result.SPFIssues += "Record approaching length limit ($($result.SPFRecordLength) characters) - consider optimization"
-            Write-Host "        Record Length: $($result.SPFRecordLength) characters (approaching limit)" -ForegroundColor Yellow
-        } else {
-            Write-Host "        Record Length: $($result.SPFRecordLength) characters" -ForegroundColor Green
-        }
-        
-        # Count DNS lookups in SPF record
-        $dnsLookupCount = Get-SPFDNSLookupCount $result.SPFRecord
-        $result.SPFDNSLookups = $dnsLookupCount
-        
-        if ($dnsLookupCount -gt 10) {
-            $result.SPFIssues += "Exceeds DNS lookup limit ($dnsLookupCount/10 lookups) - SPF will fail"
-        } elseif ($dnsLookupCount -gt 8) {
-            $result.SPFIssues += "Near DNS lookup limit ($dnsLookupCount/10 lookups) - consider optimization"
-        } else {
-            Write-Host "        DNS lookups: $dnsLookupCount/10" -ForegroundColor Green
-        }
-        
-        # Check TTL (Time To Live) - recommend minimum 3600 seconds (1 hour)
-        if ($result.SPFTTL -lt 3600) {
-            $result.SPFIssues += "Low TTL ($($result.SPFTTL) seconds) - recommend minimum 3600 seconds for stability"
-            Write-Host "        TTL warning: $($result.SPFTTL) seconds (recommend 3600+)" -ForegroundColor Yellow
-        } else {
-            Write-Host "        TTL: $($result.SPFTTL) seconds" -ForegroundColor Green
-        }
-        
-        # Validate SPF syntax
-        $syntaxIssues = Test-SPFSyntax $result.SPFRecord
-        $result.SPFSyntaxIssues = $syntaxIssues
-        $result.SPFSyntaxValid = ($syntaxIssues.Count -eq 0)
-        
-        if ($syntaxIssues.Count -gt 0) {
-            Write-Host "        Syntax issues found: $($syntaxIssues.Count)" -ForegroundColor Yellow
-            # Add syntax issues to general SPF issues for scoring
-            foreach ($syntaxIssue in $syntaxIssues) {
-                $result.SPFIssues += "Syntax: $syntaxIssue"
-            }
-        } else {
-            Write-Host "        Syntax validation: PASSED" -ForegroundColor Green
-        }
-        
-        # Validate SPF macro security
-        $macroSecurityIssues = Test-SPFMacroSecurity $result.SPFRecord
-        if ($macroSecurityIssues.Count -gt 0) {
-            $result.SPFMacroSecurityCheck = $false
-            Write-Host "        Macro security issues found: $($macroSecurityIssues.Count)" -ForegroundColor Yellow
-            foreach ($macroIssue in $macroSecurityIssues) {
-                $result.SPFIssues += "Macro Security: $macroIssue"
-            }
-        } else {
-            $result.SPFMacroSecurityCheck = $true
-            Write-Host "        Macro security validation: PASSED" -ForegroundColor Green
-        }
-        
-        # Validate TTL for SPF sub-records (A/MX records referenced in SPF)
-        $subRecordsTTLIssues = Test-SPFSubRecordsTTL $result.SPFRecord $domain
-        $result.SPFSubRecordsTTLValues = Get-SPFSubRecordsTTLValues $result.SPFRecord $domain
-        if ($subRecordsTTLIssues.Count -gt 0) {
-            $result.SPFSubRecordsTTLCheck = $false
-            Write-Host "        TTL sub-records issues found: $($subRecordsTTLIssues.Count)" -ForegroundColor Yellow
-            foreach ($ttlIssue in $subRecordsTTLIssues) {
-                $result.SPFIssues += "TTL Sub-Records: $ttlIssue"
-            }
-        } else {
-            $result.SPFSubRecordsTTLCheck = $true
-            Write-Host "        TTL sub-records validation: PASSED" -ForegroundColor Green
-        }
-
-        if ($result.SPFIssues.Count -gt 0) {
-            $issuesList = $result.SPFIssues -join '; '
-            Write-Host "        Warning: $issuesList" -ForegroundColor Yellow
-        }
-    } else {
-        Write-Host "        No SPF record found" -ForegroundColor Red
-        # Set all SPF check flags to false when SPF record is not found
-        $result.SPFMultipleRecordsCheck = $false
-        $result.SPFMacroSecurityCheck = $false
-        $result.SPFSubRecordsTTLCheck = $false
-        $result.SPFSyntaxValid = $false
-        # Set specific values for missing SPF record
-        $result.SPFAllMechanism = "Missing"
-        $result.SPFIssues += "SPF record not found - implement SPF protection"
-    }
-    
-    # CHECK DMARC RECORD
-    Write-Host "  [2/3] Checking DMARC record..." -ForegroundColor White
-    $dmarcDomain = "_dmarc.$domain"
-    # Query DMARC record from authoritative servers
-    $dmarcAuthServers = Get-AuthoritativeDNSServers $domain
-    $dmarcTxtRecords = Resolve-DnsNameAuthoritative -Name $dmarcDomain -Type TXT -AuthoritativeServers $dmarcAuthServers
-    $dmarcRecord = $dmarcTxtRecords | Where-Object { $_.Strings -match "^v=DMARC1" } | Select-Object -First 1
-    
-    if ($dmarcRecord) {
-        $result.DMARCFound = $true
-        $result.DMARCRecord = $dmarcRecord.Strings -join ""
-        $result.DMARCTTL = $dmarcRecord.TTL
-        Write-Host "        DMARC record found" -ForegroundColor Green
-        
-        # Extract main policy (p=)
-        if ($result.DMARCRecord -match "p=(\w+)") {
-            $result.DMARCPolicy = $matches[1]
-            Write-Host "        Policy: $($result.DMARCPolicy)" -ForegroundColor Cyan
-        }
-        
-        # Extract subdomain policy (sp=)
-        if ($result.DMARCRecord -match "sp=(\w+)") {
-            $result.DMARCSubdomainPolicy = $matches[1]
-            Write-Host "        Subdomain Policy: $($result.DMARCSubdomainPolicy)" -ForegroundColor Cyan
-        } else {
-            # If sp= is not specified, it defaults to the main policy
-            $result.DMARCSubdomainPolicy = $result.DMARCPolicy
-            Write-Host "        Subdomain Policy: $($result.DMARCSubdomainPolicy) (inherited from main policy)" -ForegroundColor Gray
-        }
-        
-        # Extract SPF alignment mode (aspf=)
-        if ($result.DMARCRecord -match "aspf=([rs])") {
-            $result.DMARCSPFAlignment = $matches[1]
-            $alignmentText = if ($matches[1] -eq "r") { "relaxed" } else { "strict" }
-            Write-Host "        SPF Alignment: $alignmentText ($($matches[1]))" -ForegroundColor Cyan
-        } else {
-            # Default is relaxed if not specified
-            $result.DMARCSPFAlignment = "r"
-            Write-Host "        SPF Alignment: relaxed (r) - default" -ForegroundColor Gray
-        }
-        
-        # Extract DKIM alignment mode (adkim=)
-        if ($result.DMARCRecord -match "adkim=([rs])") {
-            $result.DMARCDKIMAlignment = $matches[1]
-            $alignmentText = if ($matches[1] -eq "r") { "relaxed" } else { "strict" }
-            Write-Host "        DKIM Alignment: $alignmentText ($($matches[1]))" -ForegroundColor Cyan
-        } else {
-            # Default is relaxed if not specified
-            $result.DMARCDKIMAlignment = "r"
-            Write-Host "        DKIM Alignment: relaxed (r) - default" -ForegroundColor Gray
-        }
-        
-        # Extract failure reporting options (fo=)
-        if ($result.DMARCRecord -match "fo=([01ds])") {
-            $result.DMARCFailureOptions = $matches[1]
-            Write-Host "        Failure Options: $($matches[1])" -ForegroundColor Cyan
-        } else {
-            # Default is 0 if not specified
-            $result.DMARCFailureOptions = "0"
-            Write-Host "        Failure Options: 0 (default)" -ForegroundColor Gray
-        }
-        
-        # Extract DMARC version (v=)
-        if ($result.DMARCRecord -match "v=([^;]+)") {
-            $result.DMARCVersion = $matches[1].Trim()
-            Write-Host "        Protocol Version: $($result.DMARCVersion)" -ForegroundColor Cyan
-        } else {
-            $result.DMARCVersion = "Unknown"
-        }
-        
-        # Extract percentage of messages subjected to filtering (pct=)
-        if ($result.DMARCRecord -match "pct=(\d+)") {
-            $result.DMARCPercentage = $matches[1]
-            Write-Host "        Percentage of messages filtered: $($result.DMARCPercentage)%" -ForegroundColor Cyan
-        } else {
-            # Default is 100% if not specified
-            $result.DMARCPercentage = "100"
-            Write-Host "        Percentage of messages filtered: 100% (default)" -ForegroundColor Gray
-        }
-        
-        # Check DMARC issues
-        if ($result.DMARCPolicy -eq "none") {
-            $result.DMARCIssues += "Policy is 'none' (monitoring only)"
-        }
-        
-        # Validate subdomain policy
-        $validPolicies = @("none", "quarantine", "reject")
-        if ($result.DMARCSubdomainPolicy -notin $validPolicies) {
-            $result.DMARCIssues += "Invalid subdomain policy: '$($result.DMARCSubdomainPolicy)' (valid: $($validPolicies -join ', '))"
-        }
-        
-        # Check if subdomain policy is weaker than main policy
-        $policyStrength = @{ "none" = 0; "quarantine" = 1; "reject" = 2 }
-        if ($policyStrength[$result.DMARCSubdomainPolicy] -lt $policyStrength[$result.DMARCPolicy]) {
-            $result.DMARCIssues += "Subdomain policy '$($result.DMARCSubdomainPolicy)' is weaker than main policy '$($result.DMARCPolicy)' - consider strengthening"
-        }
-        
-        # Validate alignment modes
-        $validAlignmentModes = @("r", "s")
-        if ($result.DMARCSPFAlignment -notin $validAlignmentModes) {
-            $result.DMARCIssues += "Invalid SPF alignment mode: '$($result.DMARCSPFAlignment)' (valid: r=relaxed, s=strict)"
-        }
-        if ($result.DMARCDKIMAlignment -notin $validAlignmentModes) {
-            $result.DMARCIssues += "Invalid DKIM alignment mode: '$($result.DMARCDKIMAlignment)' (valid: r=relaxed, s=strict)"
-        }
-        
-        if ($result.DMARCRecord -notmatch "rua=") {
-            $result.DMARCIssues += "No reporting email configured"
-        }
-        
-        # Check TTL (Time To Live) - recommend minimum 3600 seconds (1 hour)
-        if ($result.DMARCTTL -lt 3600) {
-            $result.DMARCIssues += "Low TTL ($($result.DMARCTTL) seconds) - recommend minimum 3600 seconds for stability"
-            Write-Host "        TTL warning: $($result.DMARCTTL) seconds (recommend 3600+)" -ForegroundColor Yellow
-        } else {
-            Write-Host "        TTL: $($result.DMARCTTL) seconds" -ForegroundColor Green
-        }
-        
-        if ($result.DMARCIssues.Count -gt 0) {
-            $issuesList = $result.DMARCIssues -join '; '
-            Write-Host "        Warning: $issuesList" -ForegroundColor Yellow
-        }
-    } else {
-        Write-Host "        No DMARC record found" -ForegroundColor Red
-        # Set default values for missing DMARC record
-        $result.DMARCPolicy = "Missing"
-        $result.DMARCSubdomainPolicy = "Missing"
-        $result.DMARCSPFAlignment = "Missing"
-        $result.DMARCDKIMAlignment = "Missing"
-        $result.DMARCFailureOptions = "Missing"
-        $result.DMARCVersion = "Missing"
-        $result.DMARCPercentage = "Missing"
-        $result.DMARCTTL = 0
-    }
-      # CHECK DKIM RECORDS
-    Write-Host "  [3/3] Checking DKIM records..." -ForegroundColor White
-    # DKIM checking with fallback mechanism for better reliability
-    foreach ($selector in $commonSelectors) {
-        $dkimDomain = "$selector._domainkey.$domain"
-        $dkimRecord = $null
-        
-        # Debug output
-        Write-Verbose "Checking DKIM selector: $dkimDomain"
-        
-        # Try authoritative servers first, then fallback to regular DNS
-        try {
-            # Query DKIM record from authoritative servers for accurate TTL
-            $dkimAuthServers = Get-AuthoritativeDNSServers $domain
-            if ($dkimAuthServers.Count -gt 0) {
-                Write-Verbose "Using $($dkimAuthServers.Count) authoritative servers for DKIM query"
-                $dkimTxtRecords = Resolve-DnsNameAuthoritative -Name $dkimDomain -Type TXT -AuthoritativeServers $dkimAuthServers
-                $dkimRecord = $dkimTxtRecords | Where-Object { 
-                    # More inclusive pattern - any TXT record containing DKIM-related tags
-                    ($_.Strings -join '') -match "v=DKIM1|k=|p=|t=|s=|h=" 
-                } | Select-Object -First 1
-            }
-        }
-        catch {
-            Write-Verbose "Authoritative DKIM query failed for $dkimDomain`: $_"
-        }
-        
-        # Fallback to regular DNS query if authoritative failed
-        if (-not $dkimRecord) {
-            try {
-                Write-Verbose "Falling back to regular DNS query for $dkimDomain"
-                $dkimTxtRecords = Resolve-DnsName -Name $dkimDomain -Type TXT -ErrorAction SilentlyContinue
-                if ($dkimTxtRecords) {
-                    Write-Verbose "Found $($dkimTxtRecords.Count) TXT records for $dkimDomain"
-                    foreach ($txtRecord in $dkimTxtRecords) {
-                        Write-Verbose "TXT Record: $($txtRecord.Strings -join '')"
-                    }
-                }
-                $dkimRecord = $dkimTxtRecords | Where-Object { 
-                    # More inclusive pattern - any TXT record containing DKIM-related tags
-                    ($_.Strings -join '') -match "v=DKIM1|k=|p=|t=|s=|h=" 
-                } | Select-Object -First 1
-            }
-            catch {
-                Write-Verbose "Regular DKIM query failed for $dkimDomain`: $_"
-            }
-        }
-        
-        if ($dkimRecord) {
-            $result.DKIMFound = $true
-            $result.DKIMSelectors += $selector
-            $dkimRecordString = $dkimRecord.Strings -join ""
-            $result.DKIMRecords[$selector] = $dkimRecordString
-            $result.DKIMTTL[$selector] = $dkimRecord.TTL
-            
-            # Display individual selector details
-            Write-Host "        DKIM selector '$selector' found" -ForegroundColor Green
-            if ($selector -eq "selector1" -or $selector -eq "selector2") {
-                Write-Host "        $selector record: $dkimRecordString" -ForegroundColor Cyan
-            }
-            
-            # Check TTL (Time To Live) - recommend minimum 3600 seconds (1 hour)
-            $ttlIssues = @()
-            if ($dkimRecord.TTL -lt 3600) {
-                $ttlIssues += "Low TTL ($($dkimRecord.TTL) seconds) - recommend minimum 3600 seconds for stability"
-                Write-Host "        $selector TTL warning: $($dkimRecord.TTL) seconds (recommend 3600+)" -ForegroundColor Yellow
-            } else {
-                Write-Host "        $selector TTL: $($dkimRecord.TTL) seconds" -ForegroundColor Green
-            }
-            $result.DKIMTTLIssues[$selector] = $ttlIssues
-        }
-    }
-    
-    if ($result.DKIMFound) {
-        $selectorsList = $result.DKIMSelectors -join ', '
-        Write-Host "        DKIM records found: $selectorsList" -ForegroundColor Green
-        
-        # Validate DKIM syntax and status for each selector
-        $totalSyntaxIssues = 0
-        foreach ($selector in $result.DKIMSelectors) {
-            if ($result.DKIMRecords.ContainsKey($selector)) {
-                $dkimRecord = $result.DKIMRecords[$selector]
-                
-                # Syntax validation
-                $syntaxIssues = Test-DKIMSyntax $dkimRecord $selector
-                $result.DKIMSyntaxIssues[$selector] = $syntaxIssues
-                $totalSyntaxIssues += $syntaxIssues.Count
-                
-                # Key length analysis
-                $keyLengthInfo = Get-DKIMKeyLength $dkimRecord
-                $result.DKIMKeyLengths[$selector] = $keyLengthInfo
-                
-                # All mechanism status check
-                $allMechanism = Get-DKIMKeyStatus $dkimRecord
-                $result.DKIMAllMechanisms[$selector] = $allMechanism
-                
-                if ($syntaxIssues.Count -gt 0) {
-                    Write-Host "        $selector syntax issues: $($syntaxIssues.Count)" -ForegroundColor Yellow
-                } else {
-                    Write-Host "        $selector syntax validation: PASSED" -ForegroundColor Green
-                }
-                
-                # Display key length information
-                if ($keyLengthInfo.Error) {
-                    Write-Host "        $selector key length: ERROR - $($keyLengthInfo.Error)" -ForegroundColor Red
-                } else {
-                    $keyLengthColor = if ($keyLengthInfo.IsWeak) { "Red" } 
-                                     elseif ($keyLengthInfo.KeyLength -eq 1024) { "Yellow" }
-                                     else { "Green" }
-                    
-                    $statusText = if ($keyLengthInfo.IsWeak) { " (WEAK - recommend 2048+ bits)" }
-                                 elseif ($keyLengthInfo.KeyLength -eq 1024) { " (WARNING - consider upgrading to 2048+ bits)" }
-                                 else { "" }
-                    
-                    Write-Host "        $selector key length: $($keyLengthInfo.KeyLength) bits ($($keyLengthInfo.KeyType))$statusText" -ForegroundColor $keyLengthColor
-                    
-                    # Add weakness to syntax issues if key is weak
-                    if ($keyLengthInfo.IsWeak -and $keyLengthInfo.KeyLength -gt 0) {
-                        $syntaxIssues += "Weak key length ($($keyLengthInfo.KeyLength) bits) - recommend 2048+ bits for better security"
-                        $result.DKIMSyntaxIssues[$selector] = $syntaxIssues
-                        $totalSyntaxIssues++
-                    }
-                    
-                    # Add recommendation for 1024-bit keys (warning, not weakness)
-                    if ($keyLengthInfo.KeyLength -eq 1024) {
-                        $recommendations += "Consider upgrading DKIM key to 2048+ bits for enhanced security (currently using 1024-bit key for selector '$selector') - Microsoft DKIM Best Practices: https://docs.microsoft.com/microsoft-365/security/office-365-security/use-dkim-to-validate-outbound-email#dkim-key-sizes"
-                    }
-                }
-                
-                # Display all mechanism status
-                $statusColor = switch ($allMechanism) {
-                    "ACTIVE" { "Green" }
-                    "TESTING" { "Yellow" }
-                    "REVOKED" { "Red" }
-                    "UNKNOWN" { "Yellow" }
-                    default { "White" }
-                }
-                Write-Host "        $selector status: $allMechanism" -ForegroundColor $statusColor
-                
-                # Display TTL validation results
-                if ($result.DKIMTTLIssues.ContainsKey($selector) -and $result.DKIMTTLIssues[$selector].Count -gt 0) {
-                    $ttlIssuesList = $result.DKIMTTLIssues[$selector] -join '; '
-                    Write-Host "        $selector TTL issues: $ttlIssuesList" -ForegroundColor Yellow
-                } else {
-                    Write-Host "        $selector TTL validation: PASSED" -ForegroundColor Green
-                }
-            }
-        }
-        
-        $result.DKIMSyntaxValid = ($totalSyntaxIssues -eq 0)
-        
-        if ($totalSyntaxIssues -gt 0) {
-            Write-Host "        Total DKIM syntax issues found: $totalSyntaxIssues" -ForegroundColor Yellow
-        } else {
-            Write-Host "        All DKIM syntax validation: PASSED" -ForegroundColor Green
-        }
-        
-        # Display overall TTL validation summary
-        $totalTTLIssues = 0
-        foreach ($selector in $result.DKIMSelectors) {
-            if ($result.DKIMTTLIssues.ContainsKey($selector)) {
-                $totalTTLIssues += $result.DKIMTTLIssues[$selector].Count
-            }
-        }
-        
-        if ($totalTTLIssues -gt 0) {
-            Write-Host "        Total DKIM TTL issues found: $totalTTLIssues" -ForegroundColor Yellow
-        } else {
-            Write-Host "        All DKIM TTL validation: PASSED" -ForegroundColor Green
-        }
-        
-        # Enhanced DKIM Analysis
-        Write-Host "        Running enhanced DKIM analysis..." -ForegroundColor Cyan
-        
-        # Service Provider Detection
-        $providerInfo = Get-DKIMServiceProvider $result.DKIMRecords $domain
-        $result | Add-Member -MemberType NoteProperty -Name "DKIMProviders" -Value $providerInfo
-        
-        if ($providerInfo.DetectedProviders.Count -gt 0) {
-            Write-Host "        Service Provider: $($providerInfo.DetectedProviders -join ', ')" -ForegroundColor Cyan
-        } else {
-            Write-Host "        Service Provider: NOT IDENTIFIED (custom/self-hosted)" -ForegroundColor White
-        }
-        
-        # Display selector1 and selector2 details if found
-        if ($result.DKIMRecords.ContainsKey("selector1")) {
-            Write-Host "        Selector1 Details: $($result.DKIMRecords['selector1'])" -ForegroundColor White
-        }
-        if ($result.DKIMRecords.ContainsKey("selector2")) {
-            Write-Host "        Selector2 Details: $($result.DKIMRecords['selector2'])" -ForegroundColor White
-        }
-    } else {
-        Write-Host "        No DKIM records found" -ForegroundColor Red
-        # Initialize empty TTL issues for missing DKIM records
-        $result.DKIMTTLIssues = @{}
-    }
-    
-    # CALCULATE SCORE AND STATUS
-    $score = 0
-    $recommendations = @()
-    
-    # SPF scoring (30 points)
-    if ($result.SPFFound) {
-        if ($result.SPFIssues.Count -eq 0) {
-            $score += 30
-        } else {
-            $score += 15
-            # Add specific SPF recommendations based on issues found
-            foreach ($issue in $result.SPFIssues) {
-                $recommendations += Get-Recommendation -Issue $issue -Protocol "SPF"
-            }
-        }
-    } else {
-        $recommendations += "Implement SPF record - Microsoft Setup Guide: $($script:MSURLs.SPFSetup)"
-    }
-        
-        # DMARC scoring (40 points)
-        if ($result.DMARCFound) {
-            if ($result.DMARCPolicy -eq "reject") {
-                $score += 40
-            } elseif ($result.DMARCPolicy -eq "quarantine") {
-                $score += 30
-                $recommendations += "Consider upgrading DMARC policy to 'reject' - Microsoft DMARC Guide: $($script:MSURLs.DMARCSetup)"
-            } else {
-                $score += 15
-                $recommendations += "Upgrade DMARC policy from 'none' to 'quarantine' or 'reject' - Microsoft DMARC Implementation: $($script:MSURLs.DMARCImplementation)"
-            }
-            
-            if ($result.DMARCIssues.Count -gt 0) {
-                foreach ($issue in $result.DMARCIssues) {
-                    $recommendations += Get-Recommendation -Issue $issue -Protocol "DMARC"
-                }
-            }
-        } else {
-            $recommendations += "Implement DMARC record - Microsoft DMARC Setup Guide: $($script:MSURLs.DMARCSetup)"
-        }
-        
-        # DKIM scoring (30 points)
-        if ($result.DKIMFound) {
-            # Calculate total TTL issues for scoring consideration
-            $totalTTLIssues = 0
-            foreach ($selector in $result.DKIMSelectors) {
-                if ($result.DKIMTTLIssues.ContainsKey($selector)) {
-                    $totalTTLIssues += $result.DKIMTTLIssues[$selector].Count
-                }
-            }
-            
-            if ($result.DKIMSyntaxValid -and $totalTTLIssues -eq 0) {
-                $score += 30  # Full points for perfect DKIM
-            } elseif ($result.DKIMSyntaxValid -and $totalTTLIssues -gt 0) {
-                $score += 25  # Slight deduction for TTL issues
-                $recommendations += "Fix DKIM TTL issues - consider increasing TTL to 3600+ seconds for better stability and to avoid any DNS timeout issues"
-            } else {
-                $score += 20  # Partial credit for having DKIM but with syntax issues
-                $recommendations += "Fix DKIM syntax errors - Microsoft DKIM Configuration Guide: $($script:MSURLs.DKIMConfiguration)"
-                if ($totalTTLIssues -gt 0) {
-                    $recommendations += "Fix DKIM TTL issues - consider increasing TTL to 3600+ seconds for better stability and to avoid any DNS timeout issues"
-                }
-            }
-        } else {
-            $recommendations += "Implement DKIM signing - Microsoft DKIM Setup Guide: $($script:MSURLs.DKIMSetup)"
-        }
-        
-        # Determine status
-        if ($score -ge 90) {
-            $status = "Excellent"
-            $statusColor = "Green"
-        } elseif ($score -ge 70) {
-            $status = "Good"
-            $statusColor = "Cyan"
-        } elseif ($score -ge 50) {
-            $status = "Fair"
-            $statusColor = "Yellow"
-        } else {
-            $status = "Poor"
-            $statusColor = "Red"
-        }
-        
-        $result.Score = $score
-        $result.Status = $status
-        $result.Recommendations = $recommendations
-        
-        # Display summary
-        Write-Host ""
-        Write-Host "  SUMMARY FOR $domain" -ForegroundColor Cyan
-        Write-Host "  Score: $score/100 ($status)" -ForegroundColor $statusColor
-        Write-Host "  SPF: $(if($result.SPFFound){'FOUND'}else{'MISSING'})" -NoNewline
-        Write-Host " | DMARC: $(if($result.DMARCFound){'FOUND'}else{'MISSING'})" -NoNewline
-        Write-Host " | DKIM: $(if($result.DKIMFound){'FOUND'}else{'MISSING'})"
-        
-        if ($recommendations.Count -gt 0) {
-            Write-Host "  Recommendations:" -ForegroundColor Yellow
-            foreach ($rec in $recommendations) {
-                Write-Host "    • $rec" -ForegroundColor Yellow
-            }
-        }    
-        Write-Host ""
-        $allResults += $result
-    }
-
-# === Prompt user for the directory to save the files ===
-$path = Read-Host "Enter the full path (without filename) to save the reports (e.g., C:\temp)"
-
-# === Create directory if it doesn't exist ===
-if (-not (Test-Path -Path $path)) {
-    New-Item -ItemType Directory -Path $path -Force | Out-Null
-}
-
-Write-Host ""
-Write-Host "Generating HTML report..." -ForegroundColor Green
-
-# Generate timestamps and statistics
-$reportDate = Get-Date -Format "MMMM d, yyyy"
-$fileTimestamp = Get-Date -Format "yyyyMMdd-HHmmss"
-
-# Calculate overall statistics
-$totalDomains = $allResults.Count
-$avgScore = if ($totalDomains -gt 0) { [math]::Round(($allResults | Measure-Object -Property Score -Average).Average, 1) } else { 0 }
-
-# Function to calculate check percentages for donut charts
+#region Function to calculate check percentages for donut charts
 function Get-ProtocolCheckPercentage {
     param(
         [PSCustomObject]$result,
@@ -1985,6 +1267,7 @@ function Get-ProtocolCheckPercentage {
     
     return 0
 }
+#endregion
 
 # Function to generate enhanced interactive segmented donut chart SVG
 function New-SegmentedDonutChart {
@@ -2197,6 +1480,731 @@ function Get-ProtocolCheckDetails {
     return $checks
 }
 
+
+    # Show enhanced banner at script start
+    Show-Banner
+
+
+
+    # Common DKIM selectors to check - expanded list for better detection
+    $commonSelectors = @("default", "selector1", "selector2", "google", "gmail", "k1", "k2", "dkim", "mail", "email", "s1", "s2", "smtpapi", "amazonses", "mandrill", "mailgun", "pm", "zendesk1", "mxvault")
+
+    # Results storage
+    # Function to validate domain name format
+
+    $allResults = @()
+
+    # Check each domain
+    ### --- Simple User Interface Menu --- ###
+    Write-Host "============================================" -ForegroundColor Cyan
+    Write-Host "      Email Authentication Checker" -ForegroundColor Cyan
+    Write-Host "============================================" -ForegroundColor Cyan
+    Write-Host "[1] Single Domain Analysis"
+
+    Write-Host "[2] Multiple Domain Analysis"
+    Write-Host "[3] Load Domains from File (.txt)"
+
+    $menuChoice = Read-Host "Please select an option (1, 2, or 3)"
+
+    switch ($menuChoice) {
+        '1' {
+            $domain = Read-Host "Enter the domain name to analyze (e.g., example.com)"
+        
+            # Validate single domain input for invalid characters
+            if (-not (Test-DomainFormat -DomainName $domain -Context "single")) {
+                exit 1
+            }
+        
+            $domains = @($domain.Trim())
+        }
+        '2' {
+            $domainList = Read-Host "Enter domains separated by commas (e.g., example.com,contoso.com)"
+        
+            # Validate multiple domain input for invalid characters
+            if (-not (Test-DomainFormat -DomainName $domainList -Context "multiple")) {
+                exit 1
+            }
+        
+            $domains = $domainList -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ }
+        }
+        '3' {
+            $filePath = Read-Host "Enter the full path to the .txt file containing domains (one per line)"
+            if (-not (Test-Path -Path $filePath)) {
+                Write-Host "File not found: $filePath" -ForegroundColor Red
+                exit
+            }
+            $domains = Get-Content -Path $filePath | ForEach-Object { $_.Trim() } | Where-Object { $_ }
+            if (-not $domains -or $domains.Count -eq 0) {
+                Write-Host "No domains found in the file. Exiting..." -ForegroundColor Red
+                exit
+            }
+        }
+        default {
+            Write-Host "Invalid option. Exiting..." -ForegroundColor Red
+            exit
+        }
+    }
+
+
+
+    foreach ($domain in $domains) {
+        Write-Host "Analyzing domain: $domain" -ForegroundColor Yellow
+        Write-Host "-" * 50 -ForegroundColor DarkGray
+    
+        # Get authoritative servers for this domain
+        $authServers = Get-AuthoritativeDNSServers $domain
+        if ($authServers.Count -gt 0) {
+            Write-Host "    Authoritative DNS servers found:" -ForegroundColor Gray
+            foreach ($server in $authServers) {
+                Write-Host "      - $($server.NameHost) ($($server.IPAddress))" -ForegroundColor Gray
+            }
+        } else {
+            Write-Host "    No authoritative DNS servers found, using default resolvers" -ForegroundColor Yellow
+        }
+        Write-Host ""
+    
+        # Initialize result object
+        $result = [PSCustomObject]@{
+            Domain = $domain
+            SPFFound = $false
+            SPFRecord = ""
+            SPFIssues = @()
+            SPFDNSLookups = 0
+            SPFRecordLength = 0
+            SPFTTL = 0
+            SPFAllMechanism = ""
+            SPFSyntaxValid = $true
+            SPFSyntaxIssues = @()
+            DMARCFound = $false
+            DMARCRecord = ""
+            DMARCPolicy = ""
+            DMARCSubdomainPolicy = ""  # sp= tag
+            DMARCSPFAlignment = ""     # aspf= tag
+            DMARCDKIMAlignment = ""    # adkim= tag
+            DMARCFailureOptions = ""   # fo= tag (failure reporting options)
+            DMARCVersion = ""          # v= tag
+            DMARCPercentage = ""       # pct= tag
+            DMARCTTL = 0
+            DMARCIssues = @()
+            DKIMFound = $false
+            DKIMSelectors = @()
+            DKIMRecords = @{}  # Dictionary to store selector -> record mapping
+            DKIMAllMechanisms = @{}  # Dictionary to store selector -> all mechanism mapping
+            DKIMKeyLengths = @{}  # Dictionary to store selector -> key length info mapping
+            DKIMTTL = @{}  # Dictionary to store selector -> TTL mapping
+            DKIMTTLIssues = @{}  # Dictionary to store selector -> TTL issues mapping
+            DKIMSyntaxValid = $true
+            DKIMSyntaxIssues = @{}  # Dictionary to store selector -> issues mapping
+            SPFMultipleRecordsCheck = $true  # New check for multiple SPF records
+            SPFMacroSecurityCheck = $true  # New check for SPF macro security
+            SPFSubRecordsTTLCheck = $true  # New check for TTL of sub-records (A/MX records referenced in SPF)
+            SPFSubRecordsTTLValues = @{}  # Dictionary to store domain -> TTL values for A/MX records referenced in SPF
+            Score = 0
+            Status = ""
+            Recommendations = @()
+        }
+    
+        # CHECK SPF RECORD
+        Write-Host "  [1/3] Checking SPF record..." -ForegroundColor White
+    
+        # First, check for multiple SPF records (RFC violation)
+        $multipleSPFIssues = Test-MultipleSPFRecords $domain
+        if ($multipleSPFIssues.Count -gt 0) {
+            $result.SPFMultipleRecordsCheck = $false
+            foreach ($issue in $multipleSPFIssues) {
+                $result.SPFIssues += $issue
+            }
+            Write-Host "        Multiple SPF records detected - RFC violation!" -ForegroundColor Red
+            foreach ($issue in $multipleSPFIssues) {
+                if ($issue -like "SPF Record*") {
+                    Write-Host "        $issue" -ForegroundColor Yellow
+                }
+            }
+        } else {
+            $result.SPFMultipleRecordsCheck = $true
+            Write-Host "        Single SPF record compliance: PASSED" -ForegroundColor Green
+        }
+    
+        # Query SPF record from authoritative servers
+        $authServers = Get-AuthoritativeDNSServers $domain
+        $spfTxtRecords = Resolve-DnsNameAuthoritative -Name $domain -Type TXT -AuthoritativeServers $authServers
+        $spfRecord = $spfTxtRecords | Where-Object {$_.Strings -like "v=spf*"} | Select-Object -First 1
+    
+        if ($spfRecord) {
+            $result.SPFFound = $true
+            $result.SPFRecord = $spfRecord.Strings -join ""
+            $result.SPFTTL = $spfRecord.TTL
+            Write-Host "        SPF record found" -ForegroundColor Green
+        
+            # Extract and analyze SPF all mechanism
+            $allMechanism = Get-SPFAllMechanism $result.SPFRecord
+            $result.SPFAllMechanism = $allMechanism
+        
+            # Check SPF all mechanism issues with detailed analysis
+            if ($allMechanism -eq "+all") {
+                $result.SPFIssues += "Uses '+all' (allows any server) - CRITICAL SECURITY RISK"
+                Write-Host "        All Mechanism: +all (CRITICAL - allows any server)" -ForegroundColor Red
+            } elseif ($allMechanism -eq "?all") {
+                $result.SPFIssues += "Uses '?all' (neutral/weak protection) - provides minimal security"
+                Write-Host "        All Mechanism: ?all (WEAK - neutral protection)" -ForegroundColor Yellow
+            } elseif ($allMechanism -eq "~all") {
+                Write-Host "        All Mechanism: ~all (GOOD - soft fail recommended)" -ForegroundColor Green
+            } elseif ($allMechanism -eq "-all") {
+                Write-Host "        All Mechanism: -all (STRICT - hard fail)" -ForegroundColor Green
+            } elseif ([string]::IsNullOrEmpty($allMechanism)) {
+                $result.SPFIssues += "Missing 'all' mechanism - SPF policy incomplete"
+                Write-Host "        All Mechanism: MISSING (policy incomplete)" -ForegroundColor Red
+            } else {
+                $result.SPFIssues += "Unknown 'all' mechanism format: $allMechanism"
+                Write-Host "        All Mechanism: $allMechanism (UNKNOWN format)" -ForegroundColor Yellow
+            }
+        
+            # Check SPF record length (RFC 7208 - DNS TXT record limit is 255 characters)
+            $result.SPFRecordLength = $result.SPFRecord.Length
+            if ($result.SPFRecordLength -gt 255) {
+                $result.SPFIssues += "Record too long ($($result.SPFRecordLength) characters) - exceeds 255 character limit"
+                Write-Host "        Record Length: $($result.SPFRecordLength) characters (EXCEEDS LIMIT)" -ForegroundColor Red
+            } elseif ($result.SPFRecordLength -gt 200) {
+                $result.SPFIssues += "Record approaching length limit ($($result.SPFRecordLength) characters) - consider optimization"
+                Write-Host "        Record Length: $($result.SPFRecordLength) characters (approaching limit)" -ForegroundColor Yellow
+            } else {
+                Write-Host "        Record Length: $($result.SPFRecordLength) characters" -ForegroundColor Green
+            }
+        
+            # Count DNS lookups in SPF record
+            $dnsLookupCount = Get-SPFDNSLookupCount $result.SPFRecord
+            $result.SPFDNSLookups = $dnsLookupCount
+        
+            if ($dnsLookupCount -gt 10) {
+                $result.SPFIssues += "Exceeds DNS lookup limit ($dnsLookupCount/10 lookups) - SPF will fail"
+            } elseif ($dnsLookupCount -gt 8) {
+                $result.SPFIssues += "Near DNS lookup limit ($dnsLookupCount/10 lookups) - consider optimization"
+            } else {
+                Write-Host "        DNS lookups: $dnsLookupCount/10" -ForegroundColor Green
+            }
+        
+            # Check TTL (Time To Live) - recommend minimum 3600 seconds (1 hour)
+            if ($result.SPFTTL -lt 3600) {
+                $result.SPFIssues += "Low TTL ($($result.SPFTTL) seconds) - recommend minimum 3600 seconds for stability"
+                Write-Host "        TTL warning: $($result.SPFTTL) seconds (recommend 3600+)" -ForegroundColor Yellow
+            } else {
+                Write-Host "        TTL: $($result.SPFTTL) seconds" -ForegroundColor Green
+            }
+        
+            # Validate SPF syntax
+            $syntaxIssues = Test-SPFSyntax $result.SPFRecord
+            $result.SPFSyntaxIssues = $syntaxIssues
+            $result.SPFSyntaxValid = ($syntaxIssues.Count -eq 0)
+        
+            if ($syntaxIssues.Count -gt 0) {
+                Write-Host "        Syntax issues found: $($syntaxIssues.Count)" -ForegroundColor Yellow
+                # Add syntax issues to general SPF issues for scoring
+                foreach ($syntaxIssue in $syntaxIssues) {
+                    $result.SPFIssues += "Syntax: $syntaxIssue"
+                }
+            } else {
+                Write-Host "        Syntax validation: PASSED" -ForegroundColor Green
+            }
+        
+            # Validate SPF macro security
+            $macroSecurityIssues = Test-SPFMacroSecurity $result.SPFRecord
+            if ($macroSecurityIssues.Count -gt 0) {
+                $result.SPFMacroSecurityCheck = $false
+                Write-Host "        Macro security issues found: $($macroSecurityIssues.Count)" -ForegroundColor Yellow
+                foreach ($macroIssue in $macroSecurityIssues) {
+                    $result.SPFIssues += "Macro Security: $macroIssue"
+                }
+            } else {
+                $result.SPFMacroSecurityCheck = $true
+                Write-Host "        Macro security validation: PASSED" -ForegroundColor Green
+            }
+        
+            # Validate TTL for SPF sub-records (A/MX records referenced in SPF)
+            $subRecordsTTLIssues = Test-SPFSubRecordsTTL $result.SPFRecord $domain
+            $result.SPFSubRecordsTTLValues = Get-SPFSubRecordsTTLValues $result.SPFRecord $domain
+            if ($subRecordsTTLIssues.Count -gt 0) {
+                $result.SPFSubRecordsTTLCheck = $false
+                Write-Host "        TTL sub-records issues found: $($subRecordsTTLIssues.Count)" -ForegroundColor Yellow
+                foreach ($ttlIssue in $subRecordsTTLIssues) {
+                    $result.SPFIssues += "TTL Sub-Records: $ttlIssue"
+                }
+            } else {
+                $result.SPFSubRecordsTTLCheck = $true
+                Write-Host "        TTL sub-records validation: PASSED" -ForegroundColor Green
+            }
+
+            if ($result.SPFIssues.Count -gt 0) {
+                $issuesList = $result.SPFIssues -join '; '
+                Write-Host "        Warning: $issuesList" -ForegroundColor Yellow
+            }
+        } else {
+            Write-Host "        No SPF record found" -ForegroundColor Red
+            # Set all SPF check flags to false when SPF record is not found
+            $result.SPFMultipleRecordsCheck = $false
+            $result.SPFMacroSecurityCheck = $false
+            $result.SPFSubRecordsTTLCheck = $false
+            $result.SPFSyntaxValid = $false
+            # Set specific values for missing SPF record
+            $result.SPFAllMechanism = "Missing"
+            $result.SPFIssues += "SPF record not found - implement SPF protection"
+        }
+    
+        # CHECK DMARC RECORD
+        Write-Host "  [2/3] Checking DMARC record..." -ForegroundColor White
+        $dmarcDomain = "_dmarc.$domain"
+        # Query DMARC record from authoritative servers
+        $dmarcAuthServers = Get-AuthoritativeDNSServers $domain
+        $dmarcTxtRecords = Resolve-DnsNameAuthoritative -Name $dmarcDomain -Type TXT -AuthoritativeServers $dmarcAuthServers
+        $dmarcRecord = $dmarcTxtRecords | Where-Object { $_.Strings -match "^v=DMARC1" } | Select-Object -First 1
+    
+        if ($dmarcRecord) {
+            $result.DMARCFound = $true
+            $result.DMARCRecord = $dmarcRecord.Strings -join ""
+            $result.DMARCTTL = $dmarcRecord.TTL
+            Write-Host "        DMARC record found" -ForegroundColor Green
+        
+            # Extract main policy (p=)
+            if ($result.DMARCRecord -match "p=(\w+)") {
+                $result.DMARCPolicy = $matches[1]
+                Write-Host "        Policy: $($result.DMARCPolicy)" -ForegroundColor Cyan
+            }
+        
+            # Extract subdomain policy (sp=)
+            if ($result.DMARCRecord -match "sp=(\w+)") {
+                $result.DMARCSubdomainPolicy = $matches[1]
+                Write-Host "        Subdomain Policy: $($result.DMARCSubdomainPolicy)" -ForegroundColor Cyan
+            } else {
+                # If sp= is not specified, it defaults to the main policy
+                $result.DMARCSubdomainPolicy = $result.DMARCPolicy
+                Write-Host "        Subdomain Policy: $($result.DMARCSubdomainPolicy) (inherited from main policy)" -ForegroundColor Gray
+            }
+        
+            # Extract SPF alignment mode (aspf=)
+            if ($result.DMARCRecord -match "aspf=([rs])") {
+                $result.DMARCSPFAlignment = $matches[1]
+                $alignmentText = if ($matches[1] -eq "r") { "relaxed" } else { "strict" }
+                Write-Host "        SPF Alignment: $alignmentText ($($matches[1]))" -ForegroundColor Cyan
+            } else {
+                # Default is relaxed if not specified
+                $result.DMARCSPFAlignment = "r"
+                Write-Host "        SPF Alignment: relaxed (r) - default" -ForegroundColor Gray
+            }
+        
+            # Extract DKIM alignment mode (adkim=)
+            if ($result.DMARCRecord -match "adkim=([rs])") {
+                $result.DMARCDKIMAlignment = $matches[1]
+                $alignmentText = if ($matches[1] -eq "r") { "relaxed" } else { "strict" }
+                Write-Host "        DKIM Alignment: $alignmentText ($($matches[1]))" -ForegroundColor Cyan
+            } else {
+                # Default is relaxed if not specified
+                $result.DMARCDKIMAlignment = "r"
+                Write-Host "        DKIM Alignment: relaxed (r) - default" -ForegroundColor Gray
+            }
+        
+            # Extract failure reporting options (fo=)
+            if ($result.DMARCRecord -match "fo=([01ds])") {
+                $result.DMARCFailureOptions = $matches[1]
+                Write-Host "        Failure Options: $($matches[1])" -ForegroundColor Cyan
+            } else {
+                # Default is 0 if not specified
+                $result.DMARCFailureOptions = "0"
+                Write-Host "        Failure Options: 0 (default)" -ForegroundColor Gray
+            }
+        
+            # Extract DMARC version (v=)
+            if ($result.DMARCRecord -match "v=([^;]+)") {
+                $result.DMARCVersion = $matches[1].Trim()
+                Write-Host "        Protocol Version: $($result.DMARCVersion)" -ForegroundColor Cyan
+            } else {
+                $result.DMARCVersion = "Unknown"
+            }
+        
+            # Extract percentage of messages subjected to filtering (pct=)
+            if ($result.DMARCRecord -match "pct=(\d+)") {
+                $result.DMARCPercentage = $matches[1]
+                Write-Host "        Percentage of messages filtered: $($result.DMARCPercentage)%" -ForegroundColor Cyan
+            } else {
+                # Default is 100% if not specified
+                $result.DMARCPercentage = "100"
+                Write-Host "        Percentage of messages filtered: 100% (default)" -ForegroundColor Gray
+            }
+        
+            # Check DMARC issues
+            if ($result.DMARCPolicy -eq "none") {
+                $result.DMARCIssues += "Policy is 'none' (monitoring only)"
+            }
+        
+            # Validate subdomain policy
+            $validPolicies = @("none", "quarantine", "reject")
+            if ($result.DMARCSubdomainPolicy -notin $validPolicies) {
+                $result.DMARCIssues += "Invalid subdomain policy: '$($result.DMARCSubdomainPolicy)' (valid: $($validPolicies -join ', '))"
+            }
+        
+            # Check if subdomain policy is weaker than main policy
+            $policyStrength = @{ "none" = 0; "quarantine" = 1; "reject" = 2 }
+            if ($policyStrength[$result.DMARCSubdomainPolicy] -lt $policyStrength[$result.DMARCPolicy]) {
+                $result.DMARCIssues += "Subdomain policy '$($result.DMARCSubdomainPolicy)' is weaker than main policy '$($result.DMARCPolicy)' - consider strengthening"
+            }
+        
+            # Validate alignment modes
+            $validAlignmentModes = @("r", "s")
+            if ($result.DMARCSPFAlignment -notin $validAlignmentModes) {
+                $result.DMARCIssues += "Invalid SPF alignment mode: '$($result.DMARCSPFAlignment)' (valid: r=relaxed, s=strict)"
+            }
+            if ($result.DMARCDKIMAlignment -notin $validAlignmentModes) {
+                $result.DMARCIssues += "Invalid DKIM alignment mode: '$($result.DMARCDKIMAlignment)' (valid: r=relaxed, s=strict)"
+            }
+        
+            if ($result.DMARCRecord -notmatch "rua=") {
+                $result.DMARCIssues += "No reporting email configured"
+            }
+        
+            # Check TTL (Time To Live) - recommend minimum 3600 seconds (1 hour)
+            if ($result.DMARCTTL -lt 3600) {
+                $result.DMARCIssues += "Low TTL ($($result.DMARCTTL) seconds) - recommend minimum 3600 seconds for stability"
+                Write-Host "        TTL warning: $($result.DMARCTTL) seconds (recommend 3600+)" -ForegroundColor Yellow
+            } else {
+                Write-Host "        TTL: $($result.DMARCTTL) seconds" -ForegroundColor Green
+            }
+        
+            if ($result.DMARCIssues.Count -gt 0) {
+                $issuesList = $result.DMARCIssues -join '; '
+                Write-Host "        Warning: $issuesList" -ForegroundColor Yellow
+            }
+        } else {
+            Write-Host "        No DMARC record found" -ForegroundColor Red
+            # Set default values for missing DMARC record
+            $result.DMARCPolicy = "Missing"
+            $result.DMARCSubdomainPolicy = "Missing"
+            $result.DMARCSPFAlignment = "Missing"
+            $result.DMARCDKIMAlignment = "Missing"
+            $result.DMARCFailureOptions = "Missing"
+            $result.DMARCVersion = "Missing"
+            $result.DMARCPercentage = "Missing"
+            $result.DMARCTTL = 0
+        }
+          # CHECK DKIM RECORDS
+        Write-Host "  [3/3] Checking DKIM records..." -ForegroundColor White
+        # DKIM checking with fallback mechanism for better reliability
+        foreach ($selector in $commonSelectors) {
+            $dkimDomain = "$selector._domainkey.$domain"
+            $dkimRecord = $null
+        
+            # Debug output
+            Write-Verbose "Checking DKIM selector: $dkimDomain"
+        
+            # Try authoritative servers first, then fallback to regular DNS
+            try {
+                # Query DKIM record from authoritative servers for accurate TTL
+                $dkimAuthServers = Get-AuthoritativeDNSServers $domain
+                if ($dkimAuthServers.Count -gt 0) {
+                    Write-Verbose "Using $($dkimAuthServers.Count) authoritative servers for DKIM query"
+                    $dkimTxtRecords = Resolve-DnsNameAuthoritative -Name $dkimDomain -Type TXT -AuthoritativeServers $dkimAuthServers
+                    $dkimRecord = $dkimTxtRecords | Where-Object { 
+                        # More inclusive pattern - any TXT record containing DKIM-related tags
+                        ($_.Strings -join '') -match "v=DKIM1|k=|p=|t=|s=|h=" 
+                    } | Select-Object -First 1
+                }
+            }
+            catch {
+                Write-Verbose "Authoritative DKIM query failed for $dkimDomain`: $_"
+            }
+        
+            # Fallback to regular DNS query if authoritative failed
+            if (-not $dkimRecord) {
+                try {
+                    Write-Verbose "Falling back to regular DNS query for $dkimDomain"
+                    $dkimTxtRecords = Resolve-DnsName -Name $dkimDomain -Type TXT -ErrorAction SilentlyContinue
+                    if ($dkimTxtRecords) {
+                        Write-Verbose "Found $($dkimTxtRecords.Count) TXT records for $dkimDomain"
+                        foreach ($txtRecord in $dkimTxtRecords) {
+                            Write-Verbose "TXT Record: $($txtRecord.Strings -join '')"
+                        }
+                    }
+                    $dkimRecord = $dkimTxtRecords | Where-Object { 
+                        # More inclusive pattern - any TXT record containing DKIM-related tags
+                        ($_.Strings -join '') -match "v=DKIM1|k=|p=|t=|s=|h=" 
+                    } | Select-Object -First 1
+                }
+                catch {
+                    Write-Verbose "Regular DKIM query failed for $dkimDomain`: $_"
+                }
+            }
+        
+            if ($dkimRecord) {
+                $result.DKIMFound = $true
+                $result.DKIMSelectors += $selector
+                $dkimRecordString = $dkimRecord.Strings -join ""
+                $result.DKIMRecords[$selector] = $dkimRecordString
+                $result.DKIMTTL[$selector] = $dkimRecord.TTL
+            
+                # Display individual selector details
+                Write-Host "        DKIM selector '$selector' found" -ForegroundColor Green
+                if ($selector -eq "selector1" -or $selector -eq "selector2") {
+                    Write-Host "        $selector record: $dkimRecordString" -ForegroundColor Cyan
+                }
+            
+                # Check TTL (Time To Live) - recommend minimum 3600 seconds (1 hour)
+                $ttlIssues = @()
+                if ($dkimRecord.TTL -lt 3600) {
+                    $ttlIssues += "Low TTL ($($dkimRecord.TTL) seconds) - recommend minimum 3600 seconds for stability"
+                    Write-Host "        $selector TTL warning: $($dkimRecord.TTL) seconds (recommend 3600+)" -ForegroundColor Yellow
+                } else {
+                    Write-Host "        $selector TTL: $($dkimRecord.TTL) seconds" -ForegroundColor Green
+                }
+                $result.DKIMTTLIssues[$selector] = $ttlIssues
+            }
+        }
+    
+        if ($result.DKIMFound) {
+            $selectorsList = $result.DKIMSelectors -join ', '
+            Write-Host "        DKIM records found: $selectorsList" -ForegroundColor Green
+        
+            # Validate DKIM syntax and status for each selector
+            $totalSyntaxIssues = 0
+            foreach ($selector in $result.DKIMSelectors) {
+                if ($result.DKIMRecords.ContainsKey($selector)) {
+                    $dkimRecord = $result.DKIMRecords[$selector]
+                
+                    # Syntax validation
+                    $syntaxIssues = Test-DKIMSyntax $dkimRecord $selector
+                    $result.DKIMSyntaxIssues[$selector] = $syntaxIssues
+                    $totalSyntaxIssues += $syntaxIssues.Count
+                
+                    # Key length analysis
+                    $keyLengthInfo = Get-DKIMKeyLength $dkimRecord
+                    $result.DKIMKeyLengths[$selector] = $keyLengthInfo
+                
+                    # All mechanism status check
+                    $allMechanism = Get-DKIMKeyStatus $dkimRecord
+                    $result.DKIMAllMechanisms[$selector] = $allMechanism
+                
+                    if ($syntaxIssues.Count -gt 0) {
+                        Write-Host "        $selector syntax issues: $($syntaxIssues.Count)" -ForegroundColor Yellow
+                    } else {
+                        Write-Host "        $selector syntax validation: PASSED" -ForegroundColor Green
+                    }
+                
+                    # Display key length information
+                    if ($keyLengthInfo.Error) {
+                        Write-Host "        $selector key length: ERROR - $($keyLengthInfo.Error)" -ForegroundColor Red
+                    } else {
+                        $keyLengthColor = if ($keyLengthInfo.IsWeak) { "Red" } 
+                                         elseif ($keyLengthInfo.KeyLength -eq 1024) { "Yellow" }
+                                         else { "Green" }
+                    
+                        $statusText = if ($keyLengthInfo.IsWeak) { " (WEAK - recommend 2048+ bits)" }
+                                     elseif ($keyLengthInfo.KeyLength -eq 1024) { " (WARNING - consider upgrading to 2048+ bits)" }
+                                     else { "" }
+                    
+                        Write-Host "        $selector key length: $($keyLengthInfo.KeyLength) bits ($($keyLengthInfo.KeyType))$statusText" -ForegroundColor $keyLengthColor
+                    
+                        # Add weakness to syntax issues if key is weak
+                        if ($keyLengthInfo.IsWeak -and $keyLengthInfo.KeyLength -gt 0) {
+                            $syntaxIssues += "Weak key length ($($keyLengthInfo.KeyLength) bits) - recommend 2048+ bits for better security"
+                            $result.DKIMSyntaxIssues[$selector] = $syntaxIssues
+                            $totalSyntaxIssues++
+                        }
+                    
+                        # Add recommendation for 1024-bit keys (warning, not weakness)
+                        if ($keyLengthInfo.KeyLength -eq 1024) {
+                            $recommendations += "Consider upgrading DKIM key to 2048+ bits for enhanced security (currently using 1024-bit key for selector '$selector') - Microsoft DKIM Best Practices: https://docs.microsoft.com/microsoft-365/security/office-365-security/use-dkim-to-validate-outbound-email#dkim-key-sizes"
+                        }
+                    }
+                
+                    # Display all mechanism status
+                    $statusColor = switch ($allMechanism) {
+                        "ACTIVE" { "Green" }
+                        "TESTING" { "Yellow" }
+                        "REVOKED" { "Red" }
+                        "UNKNOWN" { "Yellow" }
+                        default { "White" }
+                    }
+                    Write-Host "        $selector status: $allMechanism" -ForegroundColor $statusColor
+                
+                    # Display TTL validation results
+                    if ($result.DKIMTTLIssues.ContainsKey($selector) -and $result.DKIMTTLIssues[$selector].Count -gt 0) {
+                        $ttlIssuesList = $result.DKIMTTLIssues[$selector] -join '; '
+                        Write-Host "        $selector TTL issues: $ttlIssuesList" -ForegroundColor Yellow
+                    } else {
+                        Write-Host "        $selector TTL validation: PASSED" -ForegroundColor Green
+                    }
+                }
+            }
+        
+            $result.DKIMSyntaxValid = ($totalSyntaxIssues -eq 0)
+        
+            if ($totalSyntaxIssues -gt 0) {
+                Write-Host "        Total DKIM syntax issues found: $totalSyntaxIssues" -ForegroundColor Yellow
+            } else {
+                Write-Host "        All DKIM syntax validation: PASSED" -ForegroundColor Green
+            }
+        
+            # Display overall TTL validation summary
+            $totalTTLIssues = 0
+            foreach ($selector in $result.DKIMSelectors) {
+                if ($result.DKIMTTLIssues.ContainsKey($selector)) {
+                    $totalTTLIssues += $result.DKIMTTLIssues[$selector].Count
+                }
+            }
+        
+            if ($totalTTLIssues -gt 0) {
+                Write-Host "        Total DKIM TTL issues found: $totalTTLIssues" -ForegroundColor Yellow
+            } else {
+                Write-Host "        All DKIM TTL validation: PASSED" -ForegroundColor Green
+            }
+        
+            # Enhanced DKIM Analysis
+            Write-Host "        Running enhanced DKIM analysis..." -ForegroundColor Cyan
+        
+            # Service Provider Detection
+            $providerInfo = Get-DKIMServiceProvider $result.DKIMRecords $domain
+            $result | Add-Member -MemberType NoteProperty -Name "DKIMProviders" -Value $providerInfo
+        
+            if ($providerInfo.DetectedProviders.Count -gt 0) {
+                Write-Host "        Service Provider: $($providerInfo.DetectedProviders -join ', ')" -ForegroundColor Cyan
+            } else {
+                Write-Host "        Service Provider: NOT IDENTIFIED (custom/self-hosted)" -ForegroundColor White
+            }
+        
+            # Display selector1 and selector2 details if found
+            if ($result.DKIMRecords.ContainsKey("selector1")) {
+                Write-Host "        Selector1 Details: $($result.DKIMRecords['selector1'])" -ForegroundColor White
+            }
+            if ($result.DKIMRecords.ContainsKey("selector2")) {
+                Write-Host "        Selector2 Details: $($result.DKIMRecords['selector2'])" -ForegroundColor White
+            }
+        } else {
+            Write-Host "        No DKIM records found" -ForegroundColor Red
+            # Initialize empty TTL issues for missing DKIM records
+            $result.DKIMTTLIssues = @{}
+        }
+    
+        # CALCULATE SCORE AND STATUS
+        $score = 0
+        $recommendations = @()
+    
+        # SPF scoring (30 points)
+        if ($result.SPFFound) {
+            if ($result.SPFIssues.Count -eq 0) {
+                $score += 30
+            } else {
+                $score += 15
+                # Add specific SPF recommendations based on issues found
+                foreach ($issue in $result.SPFIssues) {
+                    $recommendations += Get-Recommendation -Issue $issue -Protocol "SPF"
+                }
+            }
+        } else {
+            $recommendations += "Implement SPF record - Microsoft Setup Guide: $($script:MSURLs.SPFSetup)"
+        }
+        
+            # DMARC scoring (40 points)
+            if ($result.DMARCFound) {
+                if ($result.DMARCPolicy -eq "reject") {
+                    $score += 40
+                } elseif ($result.DMARCPolicy -eq "quarantine") {
+                    $score += 30
+                    $recommendations += "Consider upgrading DMARC policy to 'reject' - Microsoft DMARC Guide: $($script:MSURLs.DMARCSetup)"
+                } else {
+                    $score += 15
+                    $recommendations += "Upgrade DMARC policy from 'none' to 'quarantine' or 'reject' - Microsoft DMARC Implementation: $($script:MSURLs.DMARCImplementation)"
+                }
+            
+                if ($result.DMARCIssues.Count -gt 0) {
+                    foreach ($issue in $result.DMARCIssues) {
+                        $recommendations += Get-Recommendation -Issue $issue -Protocol "DMARC"
+                    }
+                }
+            } else {
+                $recommendations += "Implement DMARC record - Microsoft DMARC Setup Guide: $($script:MSURLs.DMARCSetup)"
+            }
+        
+            # DKIM scoring (30 points)
+            if ($result.DKIMFound) {
+                # Calculate total TTL issues for scoring consideration
+                $totalTTLIssues = 0
+                foreach ($selector in $result.DKIMSelectors) {
+                    if ($result.DKIMTTLIssues.ContainsKey($selector)) {
+                        $totalTTLIssues += $result.DKIMTTLIssues[$selector].Count
+                    }
+                }
+            
+                if ($result.DKIMSyntaxValid -and $totalTTLIssues -eq 0) {
+                    $score += 30  # Full points for perfect DKIM
+                } elseif ($result.DKIMSyntaxValid -and $totalTTLIssues -gt 0) {
+                    $score += 25  # Slight deduction for TTL issues
+                    $recommendations += "Fix DKIM TTL issues - consider increasing TTL to 3600+ seconds for better stability and to avoid any DNS timeout issues"
+                } else {
+                    $score += 20  # Partial credit for having DKIM but with syntax issues
+                    $recommendations += "Fix DKIM syntax errors - Microsoft DKIM Configuration Guide: $($script:MSURLs.DKIMConfiguration)"
+                    if ($totalTTLIssues -gt 0) {
+                        $recommendations += "Fix DKIM TTL issues - consider increasing TTL to 3600+ seconds for better stability and to avoid any DNS timeout issues"
+                    }
+                }
+            } else {
+                $recommendations += "Implement DKIM signing - Microsoft DKIM Setup Guide: $($script:MSURLs.DKIMSetup)"
+            }
+        
+            # Determine status
+            if ($score -ge 90) {
+                $status = "Excellent"
+                $statusColor = "Green"
+            } elseif ($score -ge 70) {
+                $status = "Good"
+                $statusColor = "Cyan"
+            } elseif ($score -ge 50) {
+                $status = "Fair"
+                $statusColor = "Yellow"
+            } else {
+                $status = "Poor"
+                $statusColor = "Red"
+            }
+        
+            $result.Score = $score
+            $result.Status = $status
+            $result.Recommendations = $recommendations
+        
+            # Display summary
+            Write-Host ""
+            Write-Host "  SUMMARY FOR $domain" -ForegroundColor Cyan
+            Write-Host "  Score: $score/100 ($status)" -ForegroundColor $statusColor
+            Write-Host "  SPF: $(if($result.SPFFound){'FOUND'}else{'MISSING'})" -NoNewline
+            Write-Host " | DMARC: $(if($result.DMARCFound){'FOUND'}else{'MISSING'})" -NoNewline
+            Write-Host " | DKIM: $(if($result.DKIMFound){'FOUND'}else{'MISSING'})"
+        
+            if ($recommendations.Count -gt 0) {
+                Write-Host "  Recommendations:" -ForegroundColor Yellow
+                foreach ($rec in $recommendations) {
+                    Write-Host "    - $rec" -ForegroundColor Yellow
+                }
+            }    
+            Write-Host ""
+            $allResults += $result
+        }
+
+    # === Prompt user for the directory to save the files ===
+    $path = Read-Host "Enter the full path (without filename) to save the reports (e.g., C:\temp)"
+
+    # === Create directory if it doesn't exist ===
+        if (-not (Test-Path -Path $path)) {
+    New-Item -ItemType Directory -Path $path -Force | Out-Null
+    }
+
+    Write-Host ""
+    Write-Host "Generating HTML report..." -ForegroundColor Green
+
+    # Generate timestamps and statistics
+    $reportDate = Get-Date -Format "MMMM d, yyyy"
+    $fileTimestamp = Get-Date -Format "yyyyMMdd-HHmmss"
+
+    # Calculate overall statistics
+    $totalDomains = $allResults.Count
+    $avgScore = if ($totalDomains -gt 0) { [math]::Round(($allResults | Measure-Object -Property Score -Average).Average, 1) } else { 0 }
+
+
+
+
 # Add check percentages to results
 foreach ($result in $allResults) {
     $spfPercentage = Get-ProtocolCheckPercentage $result "SPF"
@@ -2208,8 +2216,11 @@ foreach ($result in $allResults) {
     $result | Add-Member -MemberType NoteProperty -Name "DKIMCheckPercentage" -Value $dkimPercentage
 }
 
-# Start building HTML content
-$html = @"
+
+
+
+    # Start building HTML content
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            $html = @"
 <!DOCTYPE html>
 <html>
 <head>
@@ -3118,9 +3129,9 @@ $html = @"
         <div class="content">
 "@
 
-# Add domain sections
-$domainIndex = 0
-foreach ($result in $allResults) {
+    # Add domain sections
+    $domainIndex = 0
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                foreach ($result in $allResults) {
     $domainIndex++
     $domainId = ($result.Domain -replace '[^a-zA-Z0-9]', '') + $domainIndex  # Create safe ID from domain name + index
     
@@ -3504,85 +3515,90 @@ $(if($result.DKIMProviders -and $result.DKIMProviders.Detected.Count -gt 0) {
     $html += "            </ul>"
     $html += "        </div>"
     $html += "    </div>"
-}
+ 
 
-# Close HTML document
-$html += '        <div class="microsoft-resources">'
-$html += "            <h4>&#128218; Microsoft Official Documentation</h4>"
-$html += "            <ul>"
-$html += '                <li><strong>SPF Setup:</strong> <a href="https://docs.microsoft.com/microsoft-365/security/office-365-security/set-up-spf-in-office-365-to-help-prevent-spoofing" target="_blank">Set up SPF in Microsoft 365 to help prevent spoofing</a></li>'
-$html += '                <li><strong>DKIM Configuration:</strong> <a href="https://docs.microsoft.com/microsoft-365/security/office-365-security/use-dkim-to-validate-outbound-email" target="_blank">Use DKIM to validate outbound email sent from your domain</a></li>'
-$html += '                <li><strong>DMARC Implementation:</strong> <a href="https://docs.microsoft.com/microsoft-365/security/office-365-security/use-dmarc-to-validate-email" target="_blank">Use DMARC to validate email in Microsoft 365</a></li>'
-$html += '                <li><strong>Email Security Overview:</strong> <a href="https://docs.microsoft.com/microsoft-365/security/office-365-security/anti-spoofing-protection" target="_blank">Anti-spoofing protection in Microsoft 365</a></li>'
-$html += '                <li><strong>Exchange Online Protection:</strong> <a href="https://docs.microsoft.com/microsoft-365/security/office-365-security/exchange-online-protection-overview" target="_blank">Exchange Online Protection (EOP) overview</a></li>'
-$html += "            </ul>"
-$html += "        </div>"
-$html += ""
-$html += '    <div class="footer">'
-$html += "        <h3>&#128202; Understanding Your Results</h3>"
-$html += '        <div class="legend">'
-$html += '            <div class="legend-item">'
-$html += '                <span class="status-excellent">Excellent (90+)</span><br>'
-$html += "                <small>All records properly configured</small>"
-$html += "            </div>"
-$html += '            <div class="legend-item">'
-$html += '                <span class="status-good">Good (70-89)</span><br>'
-$html += "                <small>Minor improvements needed</small>"
-$html += "            </div>"
-$html += '            <div class="legend-item">'
-$html += '                <span class="status-fair">Fair (50-69)</span><br>'
-$html += "                <small>Some security gaps present</small>"
-$html += "            </div>"
-$html += '            <div class="legend-item">'
-$html += '                <span class="status-poor">Poor (&lt;50)</span><br>'
-$html += "                <small>Significant security vulnerabilities</small>"
-$html += "            </div>"
-$html += "        </div>"
-$html += '        <hr style="margin: 25px 0; border: none; border-top: 1px solid #ddd;">'
-$html += '        <p style="color: #888; font-size: 0.9em;">'
-$html += "            &#128231; Email Authentication Checker v1.0 | Generated on $reportDate at $(Get-Date -Format 'HH:mm:ss')"
-$html += "        </p>"
-$html += "    </div>"
-$html += "    </div>"
-$html += "</body>"
-$html += "</html>"
+    # Close HTML document
+    $html += '        <div class="microsoft-resources">'
+    $html += "            <h4>&#128218; Microsoft Official Documentation</h4>"
+    $html += "            <ul>"
+    $html += '                <li><strong>SPF Setup:</strong> <a href="https://docs.microsoft.com/microsoft-365/security/office-365-security/set-up-spf-in-office-365-to-help-prevent-spoofing" target="_blank">Set up SPF in Microsoft 365 to help prevent spoofing</a></li>'
+    $html += '                <li><strong>DKIM Configuration:</strong> <a href="https://docs.microsoft.com/microsoft-365/security/office-365-security/use-dkim-to-validate-outbound-email" target="_blank">Use DKIM to validate outbound email sent from your domain</a></li>'
+    $html += '                <li><strong>DMARC Implementation:</strong> <a href="https://docs.microsoft.com/microsoft-365/security/office-365-security/use-dmarc-to-validate-email" target="_blank">Use DMARC to validate email in Microsoft 365</a></li>'
+    $html += '                <li><strong>Email Security Overview:</strong> <a href="https://docs.microsoft.com/microsoft-365/security/office-365-security/anti-spoofing-protection" target="_blank">Anti-spoofing protection in Microsoft 365</a></li>'
+    $html += '                <li><strong>Exchange Online Protection:</strong> <a href="https://docs.microsoft.com/microsoft-365/security/office-365-security/exchange-online-protection-overview" target="_blank">Exchange Online Protection (EOP) overview</a></li>'
+    $html += "            </ul>"
+    $html += "        </div>"
+    $html += ""
+    $html += '    <div class="footer">'
+    $html += "        <h3>&#128202; Understanding Your Results</h3>"
+    $html += '        <div class="legend">'
+    $html += '            <div class="legend-item">'
+    $html += '                <span class="status-excellent">Excellent (90+)</span><br>'
+    $html += "                <small>All records properly configured</small>"
+    $html += "            </div>"
+    $html += '            <div class="legend-item">'
+    $html += '                <span class="status-good">Good (70-89)</span><br>'
+    $html += "                <small>Minor improvements needed</small>"
+    $html += "            </div>"
+    $html += '            <div class="legend-item">'
+    $html += '                <span class="status-fair">Fair (50-69)</span><br>'
+    $html += "                <small>Some security gaps present</small>"
+    $html += "            </div>"
+    $html += '            <div class="legend-item">'
+    $html += '                <span class="status-poor">Poor (&lt;50)</span><br>'
+    $html += "                <small>Significant security vulnerabilities</small>"
+    $html += "            </div>"
+    $html += "        </div>"
+    $html += '        <hr style="margin: 25px 0; border: none; border-top: 1px solid #ddd;">'
+    $html += '        <p style="color: #888; font-size: 0.9em;">'
+    $html += "            &#128231; Email Authentication Checker v1.0 | Generated on $reportDate at $(Get-Date -Format 'HH:mm:ss')"
+    $html += "        </p>"
+    $html += "    </div>"
+    $html += "    </div>"
+    $html += "</body>"
+    $html += "</html>"
 
-# Save HTML report to selected location
-$reportFileName = "Email-Auth-Report-$fileTimestamp.html"
-$reportPath = Join-Path -Path $path -ChildPath $reportFileName
+    }
 
-# Save the HTML file
-$html | Out-File -FilePath $reportPath -Encoding UTF8 -Force
+    # Save HTML report to selected location (moved outside the foreach loop)
+    $reportFileName = "Email-Auth-Report-$fileTimestamp.html"
+    $reportPath = Join-Path -Path $path -ChildPath $reportFileName
 
-Write-Host ""
-Write-Host "HTML report successfully generated!" -ForegroundColor Green
-Write-Host "Report saved to: $reportPath" -ForegroundColor Cyan
-Write-Host ""
+    # Save the HTML file
+    $html | Out-File -FilePath $reportPath -Encoding UTF8 -Force
 
-# Display final summary
-Write-Host "============================================" -ForegroundColor Cyan
-Write-Host "              FINAL SUMMARY" -ForegroundColor Cyan
-Write-Host "============================================" -ForegroundColor Cyan
-Write-Host "Total domains analyzed: $totalDomains" -ForegroundColor White
-Write-Host "Average security score: $avgScore/100" -ForegroundColor White
-Write-Host ""
+    Write-Host ""
+    Write-Host "HTML report successfully generated!" -ForegroundColor Green
+    Write-Host "Report saved to: $reportPath" -ForegroundColor Cyan
+    Write-Host ""
 
-# Ask if user wants to open the report
-$openChoice = Read-Host "Would you like to open the HTML report now? (y/n)"
-if ($openChoice -eq 'y' -or $openChoice -eq 'Y' -or $openChoice -eq 'yes') {
-    Start-Process $reportPath
-    Write-Host "Opening report in your default browser..." -ForegroundColor Green
-}
+    # Display final summary
+    Write-Host "============================================" -ForegroundColor Cyan
+    Write-Host "              FINAL SUMMARY" -ForegroundColor Cyan
+    Write-Host "============================================" -ForegroundColor Cyan
+    Write-Host "Total domains analyzed: $totalDomains" -ForegroundColor White
+    Write-Host "Average security score: $avgScore/100" -ForegroundColor White
+    Write-Host ""
 
-Write-Host ""
-Write-Host "Thank you for using Email Authentication Checker with Microsoft Documentation!" -ForegroundColor Green
-Write-Host "============================================" -ForegroundColor Cyan
+    # Ask if user wants to open the report
+    $openChoice = Read-Host "Would you like to open the HTML report now? (y/n)"
+    if ($openChoice -eq 'y' -or $openChoice -eq 'Y' -or $openChoice -eq 'yes') {
+        Start-Process $reportPath
+        Write-Host "Opening report in your default browser..." -ForegroundColor Green
+        exit  # Exit the script after opening the report
+    }
+
+    Write-Host ""
+    Write-Host "Thank you for using Email Authentication Checker with Microsoft Documentation!" -ForegroundColor Green
+    Write-Host "============================================" -ForegroundColor Cyan
+
+
 
 # SIG # Begin signature block
 # MIIFiwYJKoZIhvcNAQcCoIIFfDCCBXgCAQExCzAJBgUrDgMCGgUAMGkGCisGAQQB
 # gjcCAQSgWzBZMDQGCisGAQQBgjcCAR4wJgIDAQAABBAfzDtgWUsITrck0sYpfvNR
-# AgEAAgEAAgEAAgEAAgEAMCEwCQYFKw4DAhoFAAQUwEX+hzMzRwqhZCz3+WlYaieA
-# SVmgggMcMIIDGDCCAgCgAwIBAgIQLmc4TbNqUYVPsD95nRS6TDANBgkqhkiG9w0B
+# AgEAAgEAAgEAAgEAAgEAMCEwCQYFKw4DAhoFAAQU3+jWmgseLKuSBLTc82JFH60F
+# 9o+gggMcMIIDGDCCAgCgAwIBAgIQLmc4TbNqUYVPsD95nRS6TDANBgkqhkiG9w0B
 # AQsFADAkMSIwIAYDVQQDDBlBYmR1bGxhaFptYWlsaUNvZGVTaWduaW5nMB4XDTI1
 # MDcxNjE1MjM1MloXDTI2MDcxNjE1NDM1MlowJDEiMCAGA1UEAwwZQWJkdWxsYWha
 # bWFpbGlDb2RlU2lnbmluZzCCASIwDQYJKoZIhvcNAQEBBQADggEPADCCAQoCggEB
@@ -3602,11 +3618,11 @@ Write-Host "============================================" -ForegroundColor Cyan
 # JDEiMCAGA1UEAwwZQWJkdWxsYWhabWFpbGlDb2RlU2lnbmluZwIQLmc4TbNqUYVP
 # sD95nRS6TDAJBgUrDgMCGgUAoHgwGAYKKwYBBAGCNwIBDDEKMAigAoAAoQKAADAZ
 # BgkqhkiG9w0BCQMxDAYKKwYBBAGCNwIBBDAcBgorBgEEAYI3AgELMQ4wDAYKKwYB
-# BAGCNwIBFTAjBgkqhkiG9w0BCQQxFgQUVQcP6ta8I/b4Z3+a+Hr9KLt9nOIwDQYJ
-# KoZIhvcNAQEBBQAEggEAaq5P3UW8imHkEQRkxWiuvMGFgGhEz2nICXWOmzzhCQNs
-# Yl6WFljrd7B/UL5ihG+4shB6BBmhREJd7ZOLnk1my9U6TaATta0341alnchfWCl6
-# qtLSd+KzGZMIaPNva8rsCwjtw1mnAFP0koUI/ofpE8IIpLuGr9Jn6tynM9J5Oc17
-# oJe5xvLf9BrPljCyYTIrQQXiRF3wbt9A3OR3y/P38D33LG4ZN9HcvOJPuJyr0f6N
-# CFRTkGvxJqsfWLOpmB0qTFD/IlHWdJrPrl9/VNRSL9IVTW8pZ/l0fjxd/05S/Ybm
-# /i6MmFp3YxGRO9nACjwrzRSERk8ztqI2NsG1beWf+g==
+# BAGCNwIBFTAjBgkqhkiG9w0BCQQxFgQUebQH/lhJ1Sr/MGK3UTj7ajsxPpowDQYJ
+# KoZIhvcNAQEBBQAEggEARZiK7fku8zAic2z0GP1e10DYj9580I9jedu/QN03D5X1
+# oGad8XokIMXQYBv0xacVN4tI1PcvKmdzXYmILLKXSN4QMLFBVcrvplZKO3icrJJ8
+# jnO9psgiCp7QT/CoQTIGuilovNleVXx1igLbjSQEnbsJmPKkyYKzo0hvzhC0nQ8Z
+# 3RRRhE+G3WDWzN8aXHg5gtw9cvZ4BFSoYUXm6DczcgilkRIjwN6ObtsGHO5EFhNa
+# tRfuS1P87SuDS55gSq2qmh94czpEMyLpqvLaDovBlEqSTX07GfUBdYimXs2S1lFW
+# v5fXEZDwyVHrM8otWspgV+KVBjqs/Asp0aPKtvsSyg==
 # SIG # End signature block
