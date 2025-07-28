@@ -312,7 +312,6 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 ## 👤 Author
 
 **Abdullah Zmaili**
-- Email: [abdullah.zmaili@example.com](mailto:abdullah.zmaili@example.com)
 - LinkedIn: [Abdullah Zmaili](https://linkedin.com/in/abdullah-zmaili)
 
 ## 🆘 Support
