@@ -1,122 +1,118 @@
-# 🚀 Quick Start Guide - Email Authentication Checker v1.0
+# 🚀 Email Authentication Checker v1.3 - Quick Start Guide
 
-Get running with the Email Authentication Checker in under 3 minutes! **Enhanced with authoritative DNS queries, comprehensive security analysis (19 checks), professional HTML reporting, and new DMARC failure options analysis.**
+## Prerequisites
 
-## ⚡ Prerequisites
+- **PowerShell 5.1 or later** (Windows PowerShell or PowerShell Core)
+- **Administrator privileges** (recommended for optimal DNS queries)
+- **Internet connection** for DNS lookups
 
-- ✅ Windows PowerShell 5.1+ 
-- ✅ Network connectivity
-- ✅ Domain(s) to analyze
-- ✅ Output directory path (e.g., C:\Reports)
-- ✅ Administrator privileges (recommended)
+## 🆕 What's New in v1.3
 
-## 🎯 5-Minute Setup
+- **Enhanced X-Microsoft-Antispam-Mailbox-Delivery Parsing** with UCF, JMR, Dest, OFR parameters
+- **Improved Authentication-Results Header Processing** excluding ARC headers
+- **Protocol Card Visualization** for Microsoft antispam metrics
+- **Advanced Unicode Handling** preventing encoding artifacts
 
-### Step 1: Download & Setup
+## Quick Setup
+
+1. **Download** the script to your local machine
+2. **Right-click** on PowerShell and select "Run as Administrator"
+3. **Navigate** to the script directory:
+   ```powershell
+   cd "C:\path\to\script\directory"
+   ```
+4. **Run** the script:
+   ```powershell
+   .\EmailAuthChecker.ps1
+   ```
+
+## Quick Usage Examples
+
+### 🎯 Single Domain Analysis
 ```powershell
-# Download EmailAuthChecker.ps1 to your directory
-# Right-click PowerShell → "Run as Administrator"
-cd C:\Tools
-Set-ExecutionPolicy RemoteSigned -Scope CurrentUser  # If needed
+# Select option [1] from the menu
+# Enter: microsoft.com
 ```
 
-### Step 2: Run the Tool
+### 🎯 Multiple Domains
 ```powershell
-.\EmailAuthChecker.ps1
+# Select option [2] from the menu  
+# Enter: microsoft.com,contoso.com,outlook.com
 ```
 
-### Step 3: Follow Prompts
-```
-Enter domain(s) to check: example.com, contoso.com
-Enter the full path to save reports: C:\Reports
-
-# Analysis runs automatically...
-
-============================================
-              FINAL SUMMARY
-============================================
-Total domains analyzed: 2
-Average security score: 85/100
-
-Would you like to open the HTML report now? (y/n): y
-Opening report in your default browser...
-
-Thank you for using Email Authentication Checker with Microsoft Documentation!
-============================================
-```
-
-## 📊 Understanding Results
-
-### 🟢 Green Charts (SPF Protocol)
-- **9 Checks**: Record presence, syntax, single record, DNS lookups (≤10), length (≤255), TTL (≥3600s), SPF enforcement rule, macro security, sub-record TTL
-
-### 🔵 Blue Charts (DMARC Protocol) 
-- **8 Checks**: Record presence, policy (none/quarantine/reject), reporting config, strong enforcement, subdomain policy, failure options (fo= tag), TTL, alignment modes
-
-### 🟣 Purple Charts (DKIM Protocol)
-- **5 Checks**: Record presence, syntax validation, key status (ACTIVE/TESTING/REVOKED), key strength (≥1024 bits), TTL validation
-
-### ❌ Red Indicators
-- **MISSING RECORDS**: No authentication configured (all related checks fail)
-- **Low TTL**: Values under 3600 seconds (security weakness)
-- **Weak Keys**: DKIM keys under 1024 bits
-- **Multiple SPF**: RFC 7208 violation
-
-## 🆕 New Features in v1.0
-
-### SPF Enforcement Rule (Previously "All Mechanism")
-- **Better Naming**: Now called "SPF Enforcement Rule" for clarity
-- **Enhanced Analysis**: Detailed descriptions for each mechanism:
-  - `?all`: WEAK - Neutral (no specific action)
-  - `~all`: GOOD - Soft Fail (emails marked but accepted)
-  - `-all`: STRICT - Hard Fail (only authorized senders)
-  - `+all`: CRITICAL - Allows any server (major security risk)
-
-### DMARC Failure Options
-- **NEW**: Analysis of fo= tag in DMARC records
-- **Complete Coverage**: All four values supported:
-  - `0` (Default): Report only if both SPF and DKIM fail
-  - `1`: Report if either SPF or DKIM fails
-  - `d`: Report if DKIM fails (regardless of SPF)
-  - `s`: Report if SPF fails (regardless of DKIM)
-
-## 📁 Output Files
-
-**Format**: `Email-Auth-Report-YYYYMMDD-HHMMSS.html`
-
-**Features**: Interactive charts, copy-to-clipboard buttons, responsive design, Microsoft documentation links, enhanced DMARC analysis
-
-## 🔧 Quick Troubleshooting
-
-### Execution Policy Error
+### 🎯 Domain List from File
 ```powershell
-Set-ExecutionPolicy RemoteSigned -Scope CurrentUser
+# Create domains.txt with one domain per line:
+# microsoft.com
+# contoso.com
+# outlook.com
+
+# Select option [3] and provide file path
 ```
 
-### DNS Resolution Failed
-- Check internet connectivity
-- Verify domain spelling
-- Try different output path
+### 🎯 Email Header Analysis (Enhanced in v1.3)
+```powershell
+# Save email headers to headers.txt with Authentication-Results
+# Example content:
+# Authentication-Results: mail.domain.com;
+#   spf=pass smtp.mailfrom=sender.com;
+#   dkim=pass header.d=sender.com;
+#   dmarc=pass header.from=sender.com;
+#   reason=2.7.1
+# X-Microsoft-Antispam-Mailbox-Delivery: ucf:0; jmr:1; dest:I; OFR:TestRule;
 
-### Access Denied
-- Run PowerShell as Administrator
-- Choose accessible directory (e.g., C:\Temp)
+# Select option [4] and provide file path
+# New: Enhanced parsing of Microsoft antispam parameters
+# New: Protocol cards for UCF, JMR, Dest, OFR analysis
+```
 
-## ⚡ Pro Tips
+## ⚡ What You Get
 
-- **Batch Processing**: Use commas for multiple domains
-- **Regular Monitoring**: Run monthly for security health
-- **Microsoft Links**: Use embedded documentation for implementation
-- **Copy Buttons**: One-click DNS record copying in reports
-- **Enhanced Analysis**: Check new DMARC failure options for better reporting setup
+- **Comprehensive SPF Analysis** (9 security checks)
+- **Complete DKIM Validation** (5 security checks) 
+- **Full DMARC Assessment** (5 security checks)
+- **Enhanced Microsoft Antispam Analysis** (UCF, JMR, Dest, OFR parameters) 🆕
+- **Professional HTML Report** with interactive charts and protocol cards 🆕
+- **Microsoft Documentation Links** for remediation
+- **Actionable Security Recommendations**
+- **Enhanced Authentication-Results Processing** excluding ARC headers 🆕
 
-## 📋 Tool Summary
+## 🎯 Output
 
-- **Version**: 1.0 (EmailAuthChecker.ps1)
-- **Author**: Abdullah Zmaili
-- **Total Validations**: 19 comprehensive checks (9 SPF + 5 DMARC + 5 DKIM)
-- **Key Features**: Authoritative DNS queries, interactive HTML reports, copy-to-clipboard functionality, DMARC failure options analysis
-- **Platform**: Windows PowerShell 5.1+
+The script generates:
+- **Console output** with real-time analysis
+- **HTML report** (`EmailAuth_Report_[timestamp].html`)
+- **Automatic browser opening** of the report
 
----
-*Created: July 16, 2025 | Updated: July 20, 2025 | Enhanced email authentication analysis with Microsoft integration*
+## ⚠️ Common Issues
+
+| Issue | Solution |
+|-------|----------|
+| DNS timeout | Run as Administrator |
+| Script won't execute | `Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser` |
+| No results | Check domain spelling and internet connection |
+| Permission denied | Right-click PowerShell → "Run as Administrator" |
+
+## 🔧 Execution Policy Fix
+
+If you get execution policy errors:
+```powershell
+Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
+```
+
+## 📋 Quick Reference
+
+| Analysis Mode | Input Format | Example |
+|---------------|--------------|---------|
+| Single Domain | domain.com | `microsoft.com` |
+| Multiple Domains | domain1,domain2,domain3 | `microsoft.com,contoso.com` |
+| File Input | One domain per line | See domains.txt example |
+| Email Headers | Raw email headers | See headers.txt example |
+
+## ⏱️ Typical Runtime
+
+- **Single domain**: 10-30 seconds
+- **Multiple domains**: 30-60 seconds per domain
+- **File with 10 domains**: 5-10 minutes
+
+Ready to secure your email authentication? Run the script now! 🚀

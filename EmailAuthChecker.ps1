@@ -14,6 +14,12 @@
     It generates professional HTML reports with interactive visualizations and provides actionable recommendations with direct links to Microsoft's 
     official documentation. Enhanced with authoritative DNS server queries for accurate TTL validation and record retrieval.
     
+    Features 4 analysis modes:
+    1. Single Domain Analysis - Analyze one domain directly
+    2. Multiple Domain Analysis - Analyze multiple domains (comma-separated input)
+    3. Load Domains from File - Analyze domains from a text file (one per line)
+    4. Email Header Analysis - Extract and analyze domains from email headers (smtp.mailfrom and header.from fields)
+    
     Features 19 comprehensive security checks:
     - SPF (9 checks): Record presence, syntax, single record compliance, DNS lookups, length validation, TTL analysis, SPF enforcement rule, macro security, sub-record TTL
     - DMARC (5 checks): Record presence, policy assessment, reporting configuration, alignment modes, TTL validation  
@@ -22,17 +28,27 @@
 .NOTES
     File Name      : EmailAuthChecker.ps1
     Author         : Abdullah Zmaili
-    Version        : 1.0
+    Version        : 1.3 (Enhanced DMARC Policy Strictness)
     Date Created   : 2025-July-16
-    Date Updated   : 2025-July-20
+    Date Updated   : 2025-July-28
     Prerequisite   : PowerShell 5.1 or later, Administrator privileges for some checks
     Total Checks   : 19 comprehensive validations across all email authentication protocols
+    
+    CHANGELOG v1.3:
+    - Enhanced DMARC policy strictness: Only 'reject' policy is considered secure
+    - DMARC 'quarantine' and 'none' policies now treated as security weaknesses
+    - Revised scoring: reject=40pts, quarantine=20pts, none=5pts (vs. previous 40/30/15)
+    - Updated status thresholds: Excellent requires 95+ score AND DMARC reject policy
+    - Added 'Critical' status category for scores below 40
+    - Enhanced security-focused recommendations and warnings
 #>
 
 # Email Authentication Checker with Microsoft Documentation Integration
-# Author: Abdullah Zmaili
+# Author: Abdullah Zmaili  
+# Version 1.3 - Enhanced DMARC Policy Strictness
 # Checks SPF, DKIM, and DMARC records for domains and generates an HTML report with Microsoft official documentation links
 # Enhanced with authoritative DNS server queries for accurate TTL and record validation
+# NEW: Strict DMARC policy enforcement - only 'reject' policy achieves maximum security rating
 
 # Microsoft Documentation URLs - Constants to avoid repetition
 $script:MSURLs = @{
@@ -71,7 +87,8 @@ function Show-Banner {
 |    |  [SECURITY] Comprehensive Security Assessment & Recommendations |        |
 |    +------------------------------------------------------------------+       |
 |                                                                               |
-|                              Version 1.0 Enhanced                             |
+|                              Version 1.3 Enhanced                             |
+|                    [STRICT] Enhanced DMARC Policy Enforcement                 |
 |                          By Abdullah Zmaili - 2025                            |
 +===============================================================================+
 "@
@@ -110,7 +127,7 @@ function Get-Recommendation {
         "SPF" {
             if ($Issue -like "*+all*") {
                 return "Fix SPF '+all' mechanism - Microsoft Guide: $($script:MSURLs.SPFSetup)"
-            } elseif ($Issue -like "*?all*") {
+            } elseif ($Issue -like "*'?all'*" -or $Issue -like "*Uses ?all*") {
                 return "Strengthen SPF '?all' to '~all' or '-all' - Microsoft SPF Setup: $($script:MSURLs.SPFPrevention)"
             } elseif ($Issue -like "*all mechanism*") {
                 return "Add proper 'all' mechanism to SPF record - Microsoft Documentation: $($script:MSURLs.SPFSetup)"
@@ -124,6 +141,15 @@ function Get-Recommendation {
                 return "Consider optimizing SPF record to avoid DNS lookup limit - Microsoft SPF Best Practices: $($script:MSURLs.SPFSyntax)"
             } elseif ($Issue -like "*Syntax:*") {
                 return "Fix SPF syntax errors - Microsoft SPF Syntax Guide: $($script:MSURLs.SPFPrevention)#spf-record-syntax"
+            } elseif ($Issue -like "*Low TTL for domain*") {
+                # Extract domain and TTL from the issue text
+                if ($Issue -match "Low TTL for domain (.+?) \((\d+) seconds\)") {
+                    $domain = $matches[1]
+                    $currentTTL = $matches[2]
+                    return "Increase SPF record TTL for <strong>$domain</strong> from <strong>$currentTTL seconds</strong> to at least <strong>3600 seconds (1 hour)</strong> for better DNS caching and stability - Microsoft DNS Best Practices: $($script:MSURLs.SPFSyntax)"
+                } else {
+                    return "Increase SPF record TTL to at least 3600 seconds (1 hour) for better DNS caching and stability - Microsoft DNS Best Practices: $($script:MSURLs.SPFSyntax)"
+                }
             } elseif ($Issue -like "*Low TTL*") {
                 return "Increase SPF record TTL to at least 3600 seconds (1 hour) for better DNS caching and stability - Microsoft DNS Best Practices: $($script:MSURLs.SPFSyntax)"
             } elseif ($Issue -like "*Multiple SPF records*") {
@@ -148,7 +174,14 @@ function Get-Recommendation {
             } elseif ($Issue -like "*Invalid subdomain policy*") {
                 return "Fix DMARC subdomain policy - Valid values are 'none', 'quarantine', or 'reject' - Microsoft DMARC Policies: $($script:MSURLs.DMARCPolicies)"
             } elseif ($Issue -like "*Low TTL*") {
-                return "Increase DMARC record TTL to at least 3600 seconds (1 hour) for better DNS caching and stability - Microsoft DNS Best Practices: $($script:MSURLs.DMARCSetup)"
+                # Extract domain and TTL from issue text
+                if ($Issue -match "Low TTL for domain ([^\s]+) \((\d+) seconds\)") {
+                    $domain = $matches[1]
+                    $currentTTL = $matches[2]
+                    return "Increase DMARC record TTL for <strong>$domain</strong> from <strong>$currentTTL seconds</strong> to at least <strong>3600 seconds</strong> (1 hour) for better DNS caching and stability - Microsoft DNS Best Practices: $($script:MSURLs.DMARCSetup)"
+                } else {
+                    return "Increase DMARC record TTL to at least 3600 seconds (1 hour) for better DNS caching and stability - Microsoft DNS Best Practices: $($script:MSURLs.DMARCSetup)"
+                }
             } else {
                 return "Review DMARC configuration - Microsoft DMARC Documentation: $($script:MSURLs.DMARCSetup)"
             }
@@ -1135,6 +1168,7 @@ function Test-DomainFormat {
             Write-Host "  - Do NOT use commas (,) or semicolons (;)" -ForegroundColor Red
             Write-Host ""
             Write-Host "If you want to analyze multiple domains, please select option [2] instead." -ForegroundColor Yellow
+            Write-Host "Or if you have email headers with domain information, select option [4]." -ForegroundColor Yellow
         }
         elseif ($Context -eq "multiple") {
             Write-Host ""
@@ -1153,6 +1187,452 @@ function Test-DomainFormat {
     return $true
 }
 
+# Function to analyze Authentication-Results for DMARC Pass check
+function Get-AuthenticationResults {
+    param([string]$HeaderContent)
+    
+    $authResults = @{
+        SPFResult = "Unknown"
+        DKIMResult = "Unknown"
+        DMARCResult = "Unknown"
+        SMTPMailFrom = ""
+        HeaderFrom = ""
+        HeaderD = ""
+        CompAuth = ""
+        Reason = ""
+        AuthenticationResultsRaw = ""
+        DMARCPass = "No"
+        Condition1Met = $false
+        Condition2Met = $false
+        Details = @()
+        AntispamMailboxDelivery = ""
+        AntispamUCF = ""
+        AntispamJMR = ""
+        AntispamDest = ""
+        AntispamOFR = ""
+    }
+    
+    # Parse Authentication-Results header for individual components
+    # Enhanced regex to capture only Authentication-Results headers that start with spf= and end with reason=
+    # This excludes ARC-Authentication-Results and other unwanted headers
+    $authResultsMatches = [regex]::Matches($HeaderContent, '(?<!ARC-)Authentication-Results:\s*(spf=.*?reason=[^\r\n]*)', [System.Text.RegularExpressions.RegexOptions]::IgnoreCase -bor [System.Text.RegularExpressions.RegexOptions]::Singleline)
+    
+    foreach ($match in $authResultsMatches) {
+        $authFullHeader = $match.Groups[0].Value  # Complete header including "Authentication-Results:"
+        $authLine = $match.Groups[1].Value        # Just the content after "Authentication-Results:"
+        
+        # Store the complete Authentication-Results header
+        if ([string]::IsNullOrEmpty($authResults.AuthenticationResultsRaw)) {
+            $authResults.AuthenticationResultsRaw = $authFullHeader.Trim()
+        } else {
+            $authResults.AuthenticationResultsRaw += "`r`n" + $authFullHeader.Trim()
+        }
+        
+        $authResults.Details += "Found Authentication-Results: $($authLine.Trim())"
+        
+        # Extract SPF result - improved to handle parenthetical info
+        if ($authLine -match 'spf=([a-zA-Z]+)(?:\s*\([^)]*\))?') {
+            $authResults.SPFResult = $matches[1].ToLower()
+            $authResults.Details += "SPF Result: $($authResults.SPFResult)"
+        }
+        
+        # Extract DKIM result - improved to handle parenthetical info  
+        if ($authLine -match 'dkim=([a-zA-Z]+)(?:\s*\([^)]*\))?') {
+            $authResults.DKIMResult = $matches[1].ToLower()
+            $authResults.Details += "DKIM Result: $($authResults.DKIMResult)"
+        }
+        
+        # Extract DMARC result - improved to handle action and other parameters
+        if ($authLine -match 'dmarc=([a-zA-Z]+)(?:\s*(?:action=([a-zA-Z]+))?)?') {
+            $authResults.DMARCResult = $matches[1].ToLower()
+            $authResults.Details += "DMARC Result: $($authResults.DMARCResult)"
+            if ($matches[2]) {
+                $authResults.Details += "DMARC Action: $($matches[2])"
+            }
+        }
+        
+        # Extract smtp.mailfrom
+        if ($authLine -match 'smtp\.mailfrom=([^;\s\r\n]+)') {
+            $smtpDomain = $matches[1].Trim() -replace '^["\''<\[\(]', '' -replace '["\''>\]\);,]$', ''
+            $authResults.SMTPMailFrom = $smtpDomain
+            $authResults.Details += "Mail From (P1): $smtpDomain"
+        }
+        
+        # Extract header.from
+        if ($authLine -match 'header\.from=([^;\s\r\n]+)') {
+            $headerFromDomain = $matches[1].Trim() -replace '^["\''<\[\(]', '' -replace '["\''>\]\);,]$', ''
+            $authResults.HeaderFrom = $headerFromDomain
+            $authResults.Details += "From (P2): $headerFromDomain"
+        }
+        
+        # Extract header.d (for DKIM)
+        if ($authLine -match 'header\.d=([^;\s\r\n]+)') {
+            $headerDDomain = $matches[1].Trim() -replace '^["\''<\[\(]', '' -replace '["\''>\]\);,]$', ''
+            $authResults.HeaderD = $headerDDomain
+            $authResults.Details += "Header.d: $headerDDomain"
+        }
+        
+        # Extract compauth
+        if ($authLine -match 'compauth=([^;\s\r\n]+)') {
+            $compAuthValue = $matches[1].Trim() -replace '^["\''<\[\(]', '' -replace '["\''>\]\);,]$', ''
+            $authResults.CompAuth = $compAuthValue
+            $authResults.Details += "CompAuth: $compAuthValue"
+        }
+        
+        # Extract reason
+        if ($authLine -match 'reason=([^;\s\r\n]+)') {
+            $reasonValue = $matches[1].Trim() -replace '^["\''<\[\(]', '' -replace '["\''>\]\);,]$', ''
+            $authResults.Reason = $reasonValue
+            $authResults.Details += "Reason: $reasonValue"
+        }
+    }
+    
+    # Check DMARC Pass conditions
+    $condition1Met = $false
+    $condition2Met = $false
+    
+    # Condition 1: spf=pass AND header.from matches smtp.mailfrom
+    if ($authResults.SPFResult -eq "pass" -and 
+        -not [string]::IsNullOrEmpty($authResults.HeaderFrom) -and 
+        -not [string]::IsNullOrEmpty($authResults.SMTPMailFrom) -and
+        $authResults.HeaderFrom.ToLower() -eq $authResults.SMTPMailFrom.ToLower()) {
+        $condition1Met = $true
+        $authResults.Condition1Met = $true
+        $authResults.Details += "DMARC Pass Condition 1 MET: SPF=pass AND header.from ($($authResults.HeaderFrom)) matches smtp.mailfrom ($($authResults.SMTPMailFrom))"
+    } else {
+        $authResults.Condition1Met = $false
+    }
+    
+    # Condition 2: dkim=pass AND header.d matches smtp.mailfrom
+    if ($authResults.DKIMResult -eq "pass" -and 
+        -not [string]::IsNullOrEmpty($authResults.HeaderD) -and 
+        -not [string]::IsNullOrEmpty($authResults.SMTPMailFrom) -and
+        $authResults.HeaderD.ToLower() -eq $authResults.SMTPMailFrom.ToLower()) {
+        $condition2Met = $true
+        $authResults.Condition2Met = $true
+        $authResults.Details += "DMARC Pass Condition 2 MET: DKIM=pass AND header.d ($($authResults.HeaderD)) matches smtp.mailfrom ($($authResults.SMTPMailFrom))"
+    } else {
+        $authResults.Condition2Met = $false
+    }
+    
+    # Set DMARC Pass result
+    if ($condition1Met -or $condition2Met) {
+        $authResults.DMARCPass = "Yes"
+        $authResults.Details += "DMARC Pass: YES (at least one condition met)"
+    } else {
+        $authResults.DMARCPass = "No"
+        $authResults.Details += "DMARC Pass: NO (no conditions met)"
+        
+        # Add detailed explanation why conditions weren't met
+        if ($authResults.SPFResult -ne "pass") {
+            $authResults.Details += "Condition 1 failed: SPF result is '$($authResults.SPFResult)' (needs 'pass')"
+        }
+        if ($authResults.DKIMResult -ne "pass") {
+            $authResults.Details += "Condition 2 failed: DKIM result is '$($authResults.DKIMResult)' (needs 'pass')"
+        }
+        if ([string]::IsNullOrEmpty($authResults.HeaderFrom) -or [string]::IsNullOrEmpty($authResults.SMTPMailFrom)) {
+            $authResults.Details += "Condition 1 failed: Missing header.from or smtp.mailfrom values"
+        } elseif ($authResults.HeaderFrom.ToLower() -ne $authResults.SMTPMailFrom.ToLower()) {
+            $authResults.Details += "Condition 1 failed: header.from ($($authResults.HeaderFrom)) doesn't match smtp.mailfrom ($($authResults.SMTPMailFrom))"
+        }
+        if ([string]::IsNullOrEmpty($authResults.HeaderD) -or [string]::IsNullOrEmpty($authResults.SMTPMailFrom)) {
+            $authResults.Details += "Condition 2 failed: Missing header.d or smtp.mailfrom values"
+        } elseif ($authResults.HeaderD.ToLower() -ne $authResults.SMTPMailFrom.ToLower()) {
+            $authResults.Details += "Condition 2 failed: header.d ($($authResults.HeaderD)) doesn't match smtp.mailfrom ($($authResults.SMTPMailFrom))"
+        }
+    }
+    
+    # Parse X-Microsoft-Antispam-Mailbox-Delivery header
+    # Enhanced regex to capture complete multi-line X-Microsoft-Antispam-Mailbox-Delivery header
+    $antispamMatches = [regex]::Matches($HeaderContent, 'X-Microsoft-Antispam-Mailbox-Delivery:\s*([^\r\n]*(?:\r?\n\s+[^\r\n]*)*)', [System.Text.RegularExpressions.RegexOptions]::IgnoreCase -bor [System.Text.RegularExpressions.RegexOptions]::Multiline)
+    
+    if ($antispamMatches.Count -gt 0) {
+        # Take the first match and get the complete header value
+        $antispamValue = $antispamMatches[0].Groups[1].Value
+        # Clean up the value by removing extra whitespace and line breaks
+        $cleanedValue = $antispamValue -replace '\r?\n\s*', ' ' -replace '\s+', ' '
+        $authResults.AntispamMailboxDelivery = $cleanedValue.Trim()
+        $authResults.Details += "Found X-Microsoft-Antispam-Mailbox-Delivery header"
+        
+        # Parse individual parameters from the cleaned value
+        $cleanedValue = $authResults.AntispamMailboxDelivery
+        
+        # Extract UCF (Unified Content Filter)
+        if ($cleanedValue -match 'ucf:(\d+)') {
+            $authResults.AntispamUCF = $matches[1]
+        }
+        
+        # Extract JMR (Junk Mail Rule)
+        if ($cleanedValue -match 'jmr:(\d+)') {
+            $authResults.AntispamJMR = $matches[1]
+        }
+        
+        # Extract dest (Destination)
+        if ($cleanedValue -match 'dest:([^;]+)') {
+            $authResults.AntispamDest = $matches[1]
+        }
+        
+        # Extract OFR (Organizational Filtering Rules)
+        if ($cleanedValue -match 'OFR:([^;]+)') {
+            $authResults.AntispamOFR = $matches[1]
+        }
+    }
+    
+    return $authResults
+}
+
+# Function to parse email headers and extract domains from smtp.mailfrom and header.from
+function Get-DomainsFromEmailHeaders {
+    param([string]$FilePath)
+    
+    $domains = @()
+    $foundEntries = @()
+    
+    if (-not (Test-Path -Path $FilePath)) {
+        Write-Host "Email header file not found: $FilePath" -ForegroundColor Red
+        return @()
+    }
+    
+    try {
+        $headerContent = Get-Content -Path $FilePath -ErrorAction Stop -Raw
+        
+        Write-Host "Parsing email headers from: $FilePath" -ForegroundColor Cyan
+        Write-Host "File size: $($headerContent.Length) characters" -ForegroundColor Gray
+        Write-Host ""
+        
+        # Analyze Authentication-Results for DMARC Pass check
+        Write-Host "=== AUTHENTICATION RESULTS ANALYSIS ===" -ForegroundColor Yellow
+        $authResults = Get-AuthenticationResults -HeaderContent $headerContent
+        
+        # Store authentication results globally for later use
+        $global:AuthenticationResults = $authResults
+        
+        Write-Host "SPF Result: $($authResults.SPFResult)" -ForegroundColor $(if($authResults.SPFResult -eq 'pass'){'Green'}else{'Red'})
+        Write-Host "DKIM Result: $($authResults.DKIMResult)" -ForegroundColor $(if($authResults.DKIMResult -eq 'pass'){'Green'}else{'Red'})
+        Write-Host "DMARC Result: $($authResults.DMARCResult)" -ForegroundColor $(if($authResults.DMARCResult -eq 'pass'){'Green'}else{'Red'})
+        Write-Host "Mail From (P1): $($authResults.SMTPMailFrom)" -ForegroundColor Cyan
+        Write-Host "From (P2): $($authResults.HeaderFrom)" -ForegroundColor Cyan
+        Write-Host "Header.d: $($authResults.HeaderD)" -ForegroundColor Cyan
+        Write-Host ""
+        Write-Host "DMARC PASS CHECK: $($authResults.DMARCPass)" -ForegroundColor $(if($authResults.DMARCPass -eq 'Yes'){'Green'}else{'Red'}) -BackgroundColor $(if($authResults.DMARCPass -eq 'Yes'){'DarkGreen'}else{'DarkRed'})
+        Write-Host ""
+        Write-Host "DMARC Pass Explanation:" -ForegroundColor Cyan
+        Write-Host "  This check determines if the email would pass DMARC authentication based on:" -ForegroundColor White
+        Write-Host ""
+        
+        # Enhanced condition display with status indicators
+        Write-Host "  DMARC Pass Conditions:" -ForegroundColor Yellow
+        
+        # Condition 1 with status
+        $condition1Status = if($authResults.Condition1Met) { "[PASS] MET" } else { "[FAIL] NOT MET" }
+        $condition1Color = if($authResults.Condition1Met) { "Green" } else { "Red" }
+        $condition1BgColor = if($authResults.Condition1Met) { "DarkGreen" } else { "DarkRed" }
+        
+        Write-Host "    [$condition1Status]" -ForegroundColor $condition1Color -BackgroundColor $condition1BgColor -NoNewline
+        Write-Host " Condition 1: SPF=pass AND header.from matches smtp.mailfrom" -ForegroundColor White
+        
+        if($authResults.Condition1Met) {
+            Write-Host "      [PASS] SPF Result: $($authResults.SPFResult)" -ForegroundColor Green
+            Write-Host "      [PASS] header.from ($($authResults.HeaderFrom)) = smtp.mailfrom ($($authResults.SMTPMailFrom))" -ForegroundColor Green
+        } else {
+            Write-Host "      [FAIL] SPF Result: $($authResults.SPFResult)" -ForegroundColor Red
+            if($authResults.HeaderFrom -and $authResults.SMTPMailFrom) {
+                if($authResults.HeaderFrom.ToLower() -eq $authResults.SMTPMailFrom.ToLower()) {
+                    Write-Host "      [PASS] header.from ($($authResults.HeaderFrom)) = smtp.mailfrom ($($authResults.SMTPMailFrom))" -ForegroundColor Green
+                } else {
+                    Write-Host "      [FAIL] header.from ($($authResults.HeaderFrom)) != smtp.mailfrom ($($authResults.SMTPMailFrom))" -ForegroundColor Red
+                }
+            } else {
+                Write-Host "      [FAIL] Missing domain values" -ForegroundColor Red
+            }
+        }
+        Write-Host ""
+        
+        # Condition 2 with status
+        $condition2Status = if($authResults.Condition2Met) { "[PASS] MET" } else { "[FAIL] NOT MET" }
+        $condition2Color = if($authResults.Condition2Met) { "Green" } else { "Red" }
+        $condition2BgColor = if($authResults.Condition2Met) { "DarkGreen" } else { "DarkRed" }
+        
+        Write-Host "    [$condition2Status]" -ForegroundColor $condition2Color -BackgroundColor $condition2BgColor -NoNewline
+        Write-Host " Condition 2: DKIM=pass AND header.d matches smtp.mailfrom" -ForegroundColor White
+        
+        if($authResults.Condition2Met) {
+            Write-Host "      [PASS] DKIM Result: $($authResults.DKIMResult)" -ForegroundColor Green
+            Write-Host "      [PASS] header.d ($($authResults.HeaderD)) = smtp.mailfrom ($($authResults.SMTPMailFrom))" -ForegroundColor Green
+        } else {
+            Write-Host "      [FAIL] DKIM Result: $($authResults.DKIMResult)" -ForegroundColor Red
+            if($authResults.HeaderD -and $authResults.SMTPMailFrom) {
+                if($authResults.HeaderD.ToLower() -eq $authResults.SMTPMailFrom.ToLower()) {
+                    Write-Host "      [PASS] header.d ($($authResults.HeaderD)) = smtp.mailfrom ($($authResults.SMTPMailFrom))" -ForegroundColor Green
+                } else {
+                    Write-Host "      [FAIL] header.d ($($authResults.HeaderD)) != smtp.mailfrom ($($authResults.SMTPMailFrom))" -ForegroundColor Red
+                }
+            } else {
+                Write-Host "      [FAIL] Missing domain values" -ForegroundColor Red
+            }
+        }
+        Write-Host ""
+        
+        # Final result with enhanced highlighting
+        $finalResultText = if($authResults.DMARCPass -eq 'Yes') {
+            if($authResults.Condition1Met -and $authResults.Condition2Met) {
+                "PASS - BOTH conditions met (Excellent!)"
+            } else {
+                "PASS - At least one condition met"
+            }
+        } else {
+            "FAIL - No conditions met"
+        }
+        
+        Write-Host "  Final Result: $finalResultText" -ForegroundColor $(if($authResults.DMARCPass -eq 'Yes'){'Green'}else{'Red'}) -BackgroundColor $(if($authResults.DMARCPass -eq 'Yes'){'DarkGreen'}else{'DarkRed'})
+        Write-Host ""
+        
+        # Show detailed analysis
+        Write-Host "Detailed Analysis:" -ForegroundColor Gray
+        foreach ($detail in $authResults.Details) {
+            Write-Host "  $detail" -ForegroundColor DarkGray
+        }
+        Write-Host ""
+        
+        # Now search for domains as before
+        Write-Host "=== DOMAIN EXTRACTION ===" -ForegroundColor Yellow
+        Write-Host "Searching for smtp.mailfrom and header.from entries..." -ForegroundColor Gray
+        Write-Host ""
+        
+        # Look for smtp.mailfrom patterns in the entire content
+        $smtpMatches = [regex]::Matches($headerContent, 'smtp\.mailfrom=([^;\s\r\n]+)', [System.Text.RegularExpressions.RegexOptions]::IgnoreCase)
+        
+        Write-Host "Found $($smtpMatches.Count) smtp.mailfrom matches" -ForegroundColor Gray
+        
+        foreach ($match in $smtpMatches) {
+            $domain = $match.Groups[1].Value.Trim()
+            Write-Host "  Found smtp.mailfrom: '$domain'" -ForegroundColor Cyan
+            
+            # Clean up the domain (remove quotes, brackets, etc.)
+            $domain = $domain -replace '^["\''<\[\(]', '' -replace '["\''>\]\);,]$', ''
+            Write-Host "    Cleaned domain: '$domain'" -ForegroundColor Gray
+            
+            # Validate domain format
+            if ($domain -match '^[a-zA-Z0-9][a-zA-Z0-9\.-]*[a-zA-Z0-9]\.[a-zA-Z]{2,}$') {
+                $domains += $domain
+                $foundEntries += "smtp.mailfrom=$domain"
+                Write-Host "    + Valid smtp.mailfrom domain: $domain" -ForegroundColor Green
+            } else {
+                Write-Host "    - Invalid domain format: '$domain'" -ForegroundColor Yellow
+            }
+        }
+        
+        # Look for header.from patterns in the entire content
+        $headerFromMatches = [regex]::Matches($headerContent, 'header\.from=([^;\s\r\n]+)', [System.Text.RegularExpressions.RegexOptions]::IgnoreCase)
+        
+        Write-Host "Found $($headerFromMatches.Count) header.from matches" -ForegroundColor Gray
+        
+        foreach ($match in $headerFromMatches) {
+            $domain = $match.Groups[1].Value.Trim()
+            Write-Host "  Found header.from: '$domain'" -ForegroundColor Cyan
+            
+            # Clean up the domain (remove quotes, brackets, etc.)
+            $domain = $domain -replace '^["\''<\[\(]', '' -replace '["\''>\]\);,]$', ''
+            Write-Host "    Cleaned domain: '$domain'" -ForegroundColor Gray
+            
+            # Validate domain format
+            if ($domain -match '^[a-zA-Z0-9][a-zA-Z0-9\.-]*[a-zA-Z0-9]\.[a-zA-Z]{2,}$') {
+                $domains += $domain
+                $foundEntries += "header.from=$domain"
+                Write-Host "    + Valid header.from domain: $domain" -ForegroundColor Green
+            } else {
+                Write-Host "    - Invalid domain format: '$domain'" -ForegroundColor Yellow
+            }
+        }
+        
+        # Also look for alternative patterns that might be present
+        # Look for dmarc= patterns to extract header.from domains
+        $dmarcMatches = [regex]::Matches($headerContent, 'dmarc=[^;]*header\.from=([^;\s\r\n]+)', [System.Text.RegularExpressions.RegexOptions]::IgnoreCase)
+        
+        Write-Host "Found $($dmarcMatches.Count) DMARC header.from matches" -ForegroundColor Gray
+        
+        foreach ($match in $dmarcMatches) {
+            $domain = $match.Groups[1].Value.Trim()
+            Write-Host "  Found DMARC header.from: '$domain'" -ForegroundColor Cyan
+            
+            # Clean up the domain
+            $domain = $domain -replace '^["\''<\[\(]', '' -replace '["\''>\]\);,]$', ''
+            Write-Host "    Cleaned domain: '$domain'" -ForegroundColor Gray
+            
+            # Validate domain format
+            if ($domain -match '^[a-zA-Z0-9][a-zA-Z0-9\.-]*[a-zA-Z0-9]\.[a-zA-Z]{2,}$') {
+                $domains += $domain
+                $foundEntries += "header.from=$domain (from DMARC section)"
+                Write-Host "    + Valid DMARC header.from domain: $domain" -ForegroundColor Green
+            } else {
+                Write-Host "    - Invalid domain format: '$domain'" -ForegroundColor Yellow
+            }
+        }
+        
+        Write-Host ""
+        Write-Host "Total domains found before deduplication: $($domains.Count)" -ForegroundColor Gray
+        
+        # Remove duplicates while preserving order
+        $uniqueDomains = @()
+        $seenDomains = @{}
+        
+        foreach ($domain in $domains) {
+            $domainLower = $domain.ToLower()
+            if (-not $seenDomains.ContainsKey($domainLower)) {
+                $uniqueDomains += $domain
+                $seenDomains[$domainLower] = $true
+            }
+        }
+        
+        Write-Host ""
+        if ($uniqueDomains.Count -gt 0) {
+            Write-Host "SUCCESS: Found $($uniqueDomains.Count) unique domain(s) for analysis:" -ForegroundColor Green
+            foreach ($domain in $uniqueDomains) {
+                Write-Host "  - $domain" -ForegroundColor White
+            }
+            Write-Host ""
+            Write-Host "Extracted from $($foundEntries.Count) header entries:" -ForegroundColor Gray
+            foreach ($entry in $foundEntries) {
+                Write-Host "  - $entry" -ForegroundColor DarkGray
+            }
+        } else {
+            Write-Host "No valid domains found in email headers." -ForegroundColor Yellow
+            Write-Host ""
+            Write-Host "Troubleshooting:" -ForegroundColor Cyan
+            Write-Host "The script searches for these patterns in the email headers:" -ForegroundColor White
+            Write-Host "  1. smtp.mailfrom=domain.com" -ForegroundColor Gray
+            Write-Host "  2. header.from=domain.com" -ForegroundColor Gray
+            Write-Host "  3. dmarc=... header.from=domain.com" -ForegroundColor Gray
+            Write-Host ""
+            Write-Host "Example of expected email header format:" -ForegroundColor Cyan
+            Write-Host "Authentication-Results: spf=fail (sender IP is 1.2.3.4)" -ForegroundColor DarkGray
+            Write-Host " smtp.mailfrom=example.com; dkim=none (message not signed)" -ForegroundColor DarkGray
+            Write-Host " header.d=none;dmarc=fail action=none header.from=example.com" -ForegroundColor DarkGray
+            Write-Host ""
+            Write-Host "If your file has a different format, please check the content." -ForegroundColor White
+            
+            # Show first 500 characters of the file for debugging
+            if ($headerContent.Length -gt 0) {
+                $preview = if ($headerContent.Length -gt 500) { 
+                    $headerContent.Substring(0, 500) + "..." 
+                } else { 
+                    $headerContent 
+                }
+                Write-Host ""
+                Write-Host "File content preview (first 500 chars):" -ForegroundColor Yellow
+                Write-Host $preview -ForegroundColor DarkGray
+            }
+        }
+        
+        Write-Host ""
+        return $uniqueDomains
+        
+    } catch {
+        Write-Host "Error reading email header file: $($_.Exception.Message)" -ForegroundColor Red
+        return @()
+    }
+}
+
 
 #region Function to calculate check percentages for donut charts
 function Get-ProtocolCheckPercentage {
@@ -1165,103 +1645,59 @@ function Get-ProtocolCheckPercentage {
         "SPF" {
             if (-not $result.SPFFound) { return 0 }
             
-            $totalChecks = 9  # Updated from 8 to 9 checks
-            $passedChecks = 0
+            # Calculate SPF score based on new point system
+            # Record Present = 8 points, other 8 checks = 4 points each (Total: 40 points)
+            $maxPoints = 40
+            $earnedPoints = 0
             
-            # Check 1: SPF Present
-            if ($result.SPFFound) { $passedChecks++ }
+            $spfChecks = Get-ProtocolCheckDetails $result "SPF"
+            foreach ($check in $spfChecks) {
+                if ($check.Passed) {
+                    if ($check.Name -eq "Record Present") {
+                        $earnedPoints += 8  # Record present check gets 8 points
+                    } else {
+                        $earnedPoints += 4  # All other SPF checks get 4 points each
+                    }
+                }
+            }
             
-            # Check 2: Single SPF Record (no multiples)
-            if ($result.SPFMultipleRecordsCheck) { $passedChecks++ }
-            
-            # Check 3: Macro Security
-            if ($result.SPFMacroSecurityCheck) { $passedChecks++ }
-            
-            # Check 4: TTL for Sub-Records (A/MX records TTL >= 3600)
-            if ($result.SPFSubRecordsTTLCheck) { $passedChecks++ }
-            
-            # Check 5: DNS Lookups (< 10)
-            if ($result.SPFDNSLookups -le 10) { $passedChecks++ }
-            
-            # Check 6: Record Length (< 255)
-            if ($result.SPFRecordLength -le 255) { $passedChecks++ }
-            
-            # Check 7: TTL (>= 3600)
-            if ($result.SPFTTL -ge 3600) { $passedChecks++ }
-            
-            # Check 8: All Mechanism (strict)
-            if ($result.SPFAllMechanism -eq "~all" -or $result.SPFAllMechanism -eq "-all") { $passedChecks++ }
-            
-            # Check 9: Syntax Valid
-            if ($result.SPFSyntaxValid) { $passedChecks++ }
-            
-            return [math]::Round(($passedChecks / $totalChecks) * 100, 0)
+            return [math]::Round(($earnedPoints / $maxPoints) * 100, 0)
         }
         
         "DMARC" {
             if (-not $result.DMARCFound) { return 0 }
             
-            $totalChecks = 5  # Updated from 6 to 5 checks (removed policy not none check)
-            $passedChecks = 0
+            # Calculate DMARC score based on new point system
+            # Each of the 5 DMARC checks = 6 points each (Total: 30 points)
+            $maxPoints = 30
+            $earnedPoints = 0
             
-            # Check 1: DMARC Present
-            if ($result.DMARCFound) { $passedChecks++ }
+            $dmarcChecks = Get-ProtocolCheckDetails $result "DMARC"
+            foreach ($check in $dmarcChecks) {
+                if ($check.Passed) {
+                    $earnedPoints += 6  # Each DMARC check gets 6 points
+                }
+            }
             
-            # Check 2: Reporting configured
-            if ($result.DMARCRecord -match "rua=") { $passedChecks++ }
-            
-            # Check 3: Strong policy (quarantine or reject)
-            if ($result.DMARCPolicy -eq "quarantine" -or $result.DMARCPolicy -eq "reject") { $passedChecks++ }
-            
-            # Check 4: Subdomain policy is not weaker than main policy
-            $policyStrength = @{ "none" = 0; "quarantine" = 1; "reject" = 2; "Missing" = -1 }
-            if ($result.DMARCSubdomainPolicy -ne "Missing" -and $result.DMARCPolicy -ne "Missing" -and $policyStrength[$result.DMARCSubdomainPolicy] -ge $policyStrength[$result.DMARCPolicy]) { $passedChecks++ }
-            
-            # Check 5: TTL >= 3600 seconds
-            if ($result.DMARCTTL -ge 3600) { $passedChecks++ }
-            
-            return [math]::Round(($passedChecks / $totalChecks) * 100, 0)
+            return [math]::Round(($earnedPoints / $maxPoints) * 100, 0)
         }
         
         "DKIM" {
             if (-not $result.DKIMFound) { return 0 }
             
-            $totalChecks = 5  # Updated from 4 to 5 checks (added TTL check)
-            $passedChecks = 0
+            # Calculate DKIM score based on new point system  
+            # Each of the 5 DKIM checks = 6 points each (Total: 30 points)
+            $maxPoints = 30
+            $earnedPoints = 0
             
-            # Check 1: DKIM Present
-            if ($result.DKIMFound) { $passedChecks++ }
-            
-            # Check 2: Syntax Valid
-            if ($result.DKIMSyntaxValid) { $passedChecks++ }
-            
-            # Check 3: Keys are Active (not revoked/testing)
-            $activeKeys = 0
-            foreach ($status in $result.DKIMAllMechanisms.Values) {
-                if ($status -eq "ACTIVE") { $activeKeys++ }
-            }
-            if ($activeKeys -gt 0) { $passedChecks++ }
-            
-            # Check 4: Strong key lengths (no weak keys)
-            $hasWeakKeys = $false
-            foreach ($keyInfo in $result.DKIMKeyLengths.Values) {
-                if ($keyInfo.IsWeak) { $hasWeakKeys = $true; break }
-            }
-            if (-not $hasWeakKeys) { $passedChecks++ }
-            
-            # Check 5: TTL >= 3600 for all DKIM selectors
-            $allTTLValid = $true
-            foreach ($selector in $result.DKIMSelectors) {
-                if ($result.DKIMTTL.ContainsKey($selector)) {
-                    if ($result.DKIMTTL[$selector] -lt 3600) {
-                        $allTTLValid = $false
-                        break
-                    }
+            $dkimChecks = Get-ProtocolCheckDetails $result "DKIM"
+            foreach ($check in $dkimChecks) {
+                if ($check.Passed) {
+                    $earnedPoints += 6  # Each DKIM check gets 6 points
                 }
             }
-            if ($allTTLValid) { $passedChecks++ }
             
-            return [math]::Round(($passedChecks / $totalChecks) * 100, 0)
+            return [math]::Round(($earnedPoints / $maxPoints) * 100, 0)
         }
     }
     
@@ -1406,9 +1842,9 @@ function Get-ProtocolCheckDetails {
                 Color = if($result.DMARCFound -and $result.DMARCRecord -match "rua=") { "#007bff" } else { "#dc3545" }
             }
             $checks += @{
-                Name = "Strong Policy (quarantine or reject)"
-                Passed = ($result.DMARCFound -and ($result.DMARCPolicy -eq "quarantine" -or $result.DMARCPolicy -eq "reject"))
-                Color = if($result.DMARCFound -and ($result.DMARCPolicy -eq "quarantine" -or $result.DMARCPolicy -eq "reject")) { "#007bff" } else { "#dc3545" }
+                Name = "Strong Policy (reject only)"
+                Passed = ($result.DMARCFound -and $result.DMARCPolicy -eq "reject")
+                Color = if($result.DMARCFound -and $result.DMARCPolicy -eq "reject") { "#007bff" } else { "#dc3545" }
             }
             $checks += @{
                 Name = "Subdomain Policy"
@@ -1480,6 +1916,54 @@ function Get-ProtocolCheckDetails {
     return $checks
 }
 
+# Function to get explanation for authentication reason codes
+function Get-ReasonCodeExplanation {
+    param(
+        [string]$ReasonCode
+    )
+    
+    if (-not $ReasonCode -or $ReasonCode -eq "") {
+        return ""
+    }
+    
+    # Handle different reason code patterns
+    $explanations = @{
+        "000" = "The message failed explicit authentication (compauth=fail). For example, the message received a DMARC fail and the DMARC policy action is p=quarantine or p=reject."
+        "001" = "The message failed implicit authentication (compauth=fail). This result means that the sending domain didn't have email authentication records published, or if they did, they had a weaker failure policy (SPF ~all or ?all, or a DMARC policy of p=none)."
+        "002" = "The organization has a policy for the sender/domain pair that is explicitly prohibited from sending spoofed email. An admin manually configures this setting."
+        "010" = "The message failed DMARC, the DMARC policy action is p=reject or p=quarantine, and the sending domain is one of your organization's accepted domains (self-to-self or intra-org spoofing)."
+    }
+    
+    # Check for exact matches first
+    if ($explanations.ContainsKey($ReasonCode)) {
+        return $explanations[$ReasonCode]
+    }
+    
+    # Check for pattern matches
+    if ($ReasonCode -match "^1\d{2}$" -or $ReasonCode -match "^7\d{2}$") {
+        if ($ReasonCode -eq "130") {
+            return "The message passed authentication (compauth=pass). The ARC result was used to override a DMARC failure."
+        } else {
+            return "The message passed authentication (compauth=pass). The last two digits are internal codes used by Microsoft 365."
+        }
+    }
+    elseif ($ReasonCode -match "^2\d{2}$") {
+        return "The message soft-passed implicit authentication (compauth=softpass). The last two digits are internal codes used by Microsoft 365."
+    }
+    elseif ($ReasonCode -match "^3\d{2}$") {
+        return "The message wasn't checked for composite authentication (compauth=none)."
+    }
+    elseif ($ReasonCode -match "^4\d{2}$" -or $ReasonCode -match "^9\d{2}$") {
+        return "The message bypassed composite authentication (compauth=none). The last two digits are internal codes used by Microsoft 365."
+    }
+    elseif ($ReasonCode -match "^6\d{2}$") {
+        return "The message failed implicit email authentication, and the sending domain is one of your organization's accepted domains (self-to-self or intra-org spoofing)."
+    }
+    
+    # Return empty string if no pattern matches
+    return ""
+}
+
 
     # Show enhanced banner at script start
     Show-Banner
@@ -1500,11 +1984,11 @@ function Get-ProtocolCheckDetails {
     Write-Host "      Email Authentication Checker" -ForegroundColor Cyan
     Write-Host "============================================" -ForegroundColor Cyan
     Write-Host "[1] Single Domain Analysis"
-
     Write-Host "[2] Multiple Domain Analysis"
     Write-Host "[3] Load Domains from File (.txt)"
+    Write-Host "[4] Analyze Domains from Email Headers (.txt)"
 
-    $menuChoice = Read-Host "Please select an option (1, 2, or 3)"
+    $menuChoice = Read-Host "Please select an option (1, 2, 3, or 4)"
 
     switch ($menuChoice) {
         '1' {
@@ -1539,8 +2023,32 @@ function Get-ProtocolCheckDetails {
                 exit
             }
         }
+        '4' {
+            $headerFilePath = Read-Host "Enter the full path to the .txt file containing email headers"
+            if (-not (Test-Path -Path $headerFilePath)) {
+                Write-Host "Email header file not found: $headerFilePath" -ForegroundColor Red
+                exit
+            }
+            
+            # Store authentication results globally for use in domain analysis
+            $global:AuthenticationResults = $null
+            
+            $domains = Get-DomainsFromEmailHeaders -FilePath $headerFilePath
+            if (-not $domains -or $domains.Count -eq 0) {
+                Write-Host "No domains found in the email headers. Please check the file format." -ForegroundColor Red
+                Write-Host ""
+                Write-Host "Expected format examples:" -ForegroundColor Yellow
+                Write-Host "  smtp.mailfrom=example.com" -ForegroundColor Gray
+                Write-Host "  header.from=contoso.com" -ForegroundColor Gray
+                Write-Host ""
+                Write-Host "Exiting..." -ForegroundColor Red
+                exit
+            }
+            
+            Write-Host ""
+        }
         default {
-            Write-Host "Invalid option. Exiting..." -ForegroundColor Red
+            Write-Host "Invalid option. Please select 1, 2, 3, or 4. Exiting..." -ForegroundColor Red
             exit
         }
     }
@@ -1599,6 +2107,24 @@ function Get-ProtocolCheckDetails {
             SPFMacroSecurityCheck = $true  # New check for SPF macro security
             SPFSubRecordsTTLCheck = $true  # New check for TTL of sub-records (A/MX records referenced in SPF)
             SPFSubRecordsTTLValues = @{}  # Dictionary to store domain -> TTL values for A/MX records referenced in SPF
+            # Email Header Analysis Results (for option 4)
+            EmailHeaderSPFResult = ""
+            EmailHeaderDKIMResult = ""
+            EmailHeaderDMARCResult = ""
+            EmailHeaderSMTPMailFrom = ""
+            EmailHeaderHeaderFrom = ""
+            EmailHeaderHeaderD = ""
+            EmailHeaderCompAuth = ""
+            EmailHeaderReason = ""
+            EmailHeaderAuthenticationResultsRaw = ""
+            EmailHeaderDMARCPass = ""
+            EmailHeaderCondition1Met = $false
+            EmailHeaderCondition2Met = $false
+            EmailHeaderAntispamMailboxDelivery = ""
+            EmailHeaderAntispamUCF = ""
+            EmailHeaderAntispamJMR = ""
+            EmailHeaderAntispamDest = ""
+            EmailHeaderAntispamOFR = ""
             Score = 0
             Status = ""
             Recommendations = @()
@@ -1685,7 +2211,7 @@ function Get-ProtocolCheckDetails {
         
             # Check TTL (Time To Live) - recommend minimum 3600 seconds (1 hour)
             if ($result.SPFTTL -lt 3600) {
-                $result.SPFIssues += "Low TTL ($($result.SPFTTL) seconds) - recommend minimum 3600 seconds for stability"
+                $result.SPFIssues += "Low TTL for domain $domain ($($result.SPFTTL) seconds) - recommend minimum 3600 seconds for stability"
                 Write-Host "        TTL warning: $($result.SPFTTL) seconds (recommend 3600+)" -ForegroundColor Yellow
             } else {
                 Write-Host "        TTL: $($result.SPFTTL) seconds" -ForegroundColor Green
@@ -1861,7 +2387,7 @@ function Get-ProtocolCheckDetails {
         
             # Check TTL (Time To Live) - recommend minimum 3600 seconds (1 hour)
             if ($result.DMARCTTL -lt 3600) {
-                $result.DMARCIssues += "Low TTL ($($result.DMARCTTL) seconds) - recommend minimum 3600 seconds for stability"
+                $result.DMARCIssues += "Low TTL for domain $domain ($($result.DMARCTTL) seconds) - recommend minimum 3600 seconds for stability"
                 Write-Host "        TTL warning: $($result.DMARCTTL) seconds (recommend 3600+)" -ForegroundColor Yellow
             } else {
                 Write-Host "        TTL: $($result.DMARCTTL) seconds" -ForegroundColor Green
@@ -2080,90 +2606,131 @@ function Get-ProtocolCheckDetails {
             $result.DKIMTTLIssues = @{}
         }
     
-        # CALCULATE SCORE AND STATUS
-        $score = 0
-        $recommendations = @()
-    
-        # SPF scoring (30 points)
-        if ($result.SPFFound) {
-            if ($result.SPFIssues.Count -eq 0) {
-                $score += 30
+    # CALCULATE SCORE AND STATUS
+    $score = 0
+    $recommendations = @()
+
+    # SPF scoring (40 points total) - Granular check-based scoring
+    # Record Present = 8 points, other 8 checks = 4 points each (8 + 8×4 = 40)
+    $spfChecks = Get-ProtocolCheckDetails $result "SPF"
+    foreach ($check in $spfChecks) {
+        if ($check.Passed) {
+            if ($check.Name -eq "Record Present") {
+                $score += 8  # Record present check gets 8 points
             } else {
-                $score += 15
-                # Add specific SPF recommendations based on issues found
-                foreach ($issue in $result.SPFIssues) {
-                    $recommendations += Get-Recommendation -Issue $issue -Protocol "SPF"
-                }
+                $score += 4  # All other SPF checks get 4 points each
             }
-        } else {
-            $recommendations += "Implement SPF record - Microsoft Setup Guide: $($script:MSURLs.SPFSetup)"
         }
-        
-            # DMARC scoring (40 points)
-            if ($result.DMARCFound) {
-                if ($result.DMARCPolicy -eq "reject") {
-                    $score += 40
-                } elseif ($result.DMARCPolicy -eq "quarantine") {
-                    $score += 30
-                    $recommendations += "Consider upgrading DMARC policy to 'reject' - Microsoft DMARC Guide: $($script:MSURLs.DMARCSetup)"
-                } else {
-                    $score += 15
-                    $recommendations += "Upgrade DMARC policy from 'none' to 'quarantine' or 'reject' - Microsoft DMARC Implementation: $($script:MSURLs.DMARCImplementation)"
-                }
-            
-                if ($result.DMARCIssues.Count -gt 0) {
-                    foreach ($issue in $result.DMARCIssues) {
-                        $recommendations += Get-Recommendation -Issue $issue -Protocol "DMARC"
-                    }
-                }
+    }
+    
+    # Add recommendations for failed SPF checks
+    if (-not $result.SPFFound) {
+        $recommendations += "Implement SPF record - Microsoft Setup Guide: $($script:MSURLs.SPFSetup)"
+    } else {
+        foreach ($issue in $result.SPFIssues) {
+            $recommendations += Get-Recommendation -Issue $issue -Protocol "SPF"
+        }
+    }
+    
+    # DMARC scoring (30 points total) - Granular check-based scoring
+    # Each of the 5 DMARC checks = 6 points each (5×6 = 30)
+    $dmarcChecks = Get-ProtocolCheckDetails $result "DMARC"
+    foreach ($check in $dmarcChecks) {
+        if ($check.Passed) {
+            $score += 6  # Each DMARC check gets 6 points
+        }
+    }
+    
+    # Add recommendations for failed DMARC checks
+    if (-not $result.DMARCFound) {
+        $recommendations += "CRITICAL: Implement DMARC record with 'reject' policy - Microsoft DMARC Setup Guide: $($script:MSURLs.DMARCSetup)"
+    } else {
+        # Add specific recommendations based on policy weakness
+        if ($result.DMARCPolicy -ne "reject") {
+            if ($result.DMARCPolicy -eq "quarantine") {
+                $recommendations += "CRITICAL: Upgrade DMARC policy from 'quarantine' to 'reject' for maximum security - Microsoft DMARC Guide: $($script:MSURLs.DMARCSetup)"
             } else {
-                $recommendations += "Implement DMARC record - Microsoft DMARC Setup Guide: $($script:MSURLs.DMARCSetup)"
+                $recommendations += "CRITICAL: Upgrade DMARC policy from 'none' to 'reject' immediately - Microsoft DMARC Implementation: $($script:MSURLs.DMARCImplementation)"
             }
-        
-            # DKIM scoring (30 points)
-            if ($result.DKIMFound) {
-                # Calculate total TTL issues for scoring consideration
-                $totalTTLIssues = 0
-                foreach ($selector in $result.DKIMSelectors) {
-                    if ($result.DKIMTTLIssues.ContainsKey($selector)) {
-                        $totalTTLIssues += $result.DKIMTTLIssues[$selector].Count
-                    }
-                }
-            
-                if ($result.DKIMSyntaxValid -and $totalTTLIssues -eq 0) {
-                    $score += 30  # Full points for perfect DKIM
-                } elseif ($result.DKIMSyntaxValid -and $totalTTLIssues -gt 0) {
-                    $score += 25  # Slight deduction for TTL issues
-                    $recommendations += "Fix DKIM TTL issues - consider increasing TTL to 3600+ seconds for better stability and to avoid any DNS timeout issues"
-                } else {
-                    $score += 20  # Partial credit for having DKIM but with syntax issues
-                    $recommendations += "Fix DKIM syntax errors - Microsoft DKIM Configuration Guide: $($script:MSURLs.DKIMConfiguration)"
-                    if ($totalTTLIssues -gt 0) {
-                        $recommendations += "Fix DKIM TTL issues - consider increasing TTL to 3600+ seconds for better stability and to avoid any DNS timeout issues"
-                    }
-                }
-            } else {
-                $recommendations += "Implement DKIM signing - Microsoft DKIM Setup Guide: $($script:MSURLs.DKIMSetup)"
+        }
+        foreach ($issue in $result.DMARCIssues) {
+            $recommendations += Get-Recommendation -Issue $issue -Protocol "DMARC"
+        }
+    }
+    
+    # DKIM scoring (30 points total) - Granular check-based scoring  
+    # Each of the 5 DKIM checks = 6 points each (5×6 = 30)
+    $dkimChecks = Get-ProtocolCheckDetails $result "DKIM"
+    foreach ($check in $dkimChecks) {
+        if ($check.Passed) {
+            $score += 6  # Each DKIM check gets 6 points
+        }
+    }
+    
+    # Add recommendations for failed DKIM checks
+    if (-not $result.DKIMFound) {
+        $recommendations += "Implement DKIM signing - Microsoft DKIM Setup Guide: $($script:MSURLs.DKIMSetup)"
+    } else {
+        if (-not $result.DKIMSyntaxValid) {
+            $recommendations += "Fix DKIM syntax errors - Microsoft DKIM Configuration Guide: $($script:MSURLs.DKIMConfiguration)"
+        }
+        # Check for TTL issues
+        $totalTTLIssues = 0
+        foreach ($selector in $result.DKIMSelectors) {
+            if ($result.DKIMTTLIssues.ContainsKey($selector)) {
+                $totalTTLIssues += $result.DKIMTTLIssues[$selector].Count
             }
-        
-            # Determine status
-            if ($score -ge 90) {
-                $status = "Excellent"
-                $statusColor = "Green"
-            } elseif ($score -ge 70) {
-                $status = "Good"
-                $statusColor = "Cyan"
-            } elseif ($score -ge 50) {
-                $status = "Fair"
-                $statusColor = "Yellow"
-            } else {
-                $status = "Poor"
-                $statusColor = "Red"
-            }
-        
-            $result.Score = $score
+        }
+        if ($totalTTLIssues -gt 0) {
+            $recommendations += "Fix DKIM TTL issues - consider increasing TTL to 3600+ seconds for better stability and to avoid any DNS timeout issues"
+        }
+    }
+    
+    # Determine status with enhanced strictness for DMARC policy
+    if ($score -ge 95 -and $result.DMARCPolicy -eq "reject") {
+        $status = "Excellent"
+        $statusColor = "Green"
+    } elseif ($score -ge 85) {
+        $status = "Good"
+        $statusColor = "Cyan"
+    } elseif ($score -ge 65) {
+        $status = "Fair"
+        $statusColor = "Yellow"
+    } elseif ($score -ge 40) {
+        $status = "Poor"
+        $statusColor = "Red"
+    } else {
+        $status = "Critical"
+        $statusColor = "DarkRed"
+    }
+    
+    # Add specific note if DMARC policy is not 'reject'
+    if ($result.DMARCFound -and $result.DMARCPolicy -ne "reject") {
+        $recommendations += "NOTE: 'Excellent' status requires DMARC policy='reject'. Current policy '$($result.DMARCPolicy)' limits maximum achievable status to 'Good'."
+    }            $result.Score = $score
             $result.Status = $status
             $result.Recommendations = $recommendations
+            
+            # Add email header authentication results if available (for option 4)
+            if ($global:AuthenticationResults) {
+                $result.EmailHeaderSPFResult = $global:AuthenticationResults.SPFResult
+                $result.EmailHeaderDKIMResult = $global:AuthenticationResults.DKIMResult
+                $result.EmailHeaderDMARCResult = $global:AuthenticationResults.DMARCResult
+                $result.EmailHeaderSMTPMailFrom = $global:AuthenticationResults.SMTPMailFrom
+                $result.EmailHeaderHeaderFrom = $global:AuthenticationResults.HeaderFrom
+                $result.EmailHeaderHeaderD = $global:AuthenticationResults.HeaderD
+                $result.EmailHeaderCompAuth = $global:AuthenticationResults.CompAuth
+                $result.EmailHeaderReason = $global:AuthenticationResults.Reason
+                $result.EmailHeaderAuthenticationResultsRaw = $global:AuthenticationResults.AuthenticationResultsRaw
+                $result.EmailHeaderDMARCPass = $global:AuthenticationResults.DMARCPass
+                $result.EmailHeaderCondition1Met = $global:AuthenticationResults.Condition1Met
+                $result.EmailHeaderCondition2Met = $global:AuthenticationResults.Condition2Met
+                $result.EmailHeaderAntispamMailboxDelivery = $global:AuthenticationResults.AntispamMailboxDelivery
+                $result.EmailHeaderAntispamUCF = $global:AuthenticationResults.AntispamUCF
+                $result.EmailHeaderAntispamJMR = $global:AuthenticationResults.AntispamJMR
+                $result.EmailHeaderAntispamDest = $global:AuthenticationResults.AntispamDest
+                $result.EmailHeaderAntispamOFR = $global:AuthenticationResults.AntispamOFR
+            }
         
             # Display summary
             Write-Host ""
@@ -2172,6 +2739,16 @@ function Get-ProtocolCheckDetails {
             Write-Host "  SPF: $(if($result.SPFFound){'FOUND'}else{'MISSING'})" -NoNewline
             Write-Host " | DMARC: $(if($result.DMARCFound){'FOUND'}else{'MISSING'})" -NoNewline
             Write-Host " | DKIM: $(if($result.DKIMFound){'FOUND'}else{'MISSING'})"
+            
+            # Display email header results if available (only for option 4)
+            if ($menuChoice -eq '4' -and $global:AuthenticationResults) {
+                Write-Host ""
+                Write-Host "  EMAIL HEADER ANALYSIS:" -ForegroundColor Yellow
+                Write-Host "  SPF Result: $($result.EmailHeaderSPFResult)" -ForegroundColor $(if($result.EmailHeaderSPFResult -eq 'pass'){'Green'}else{'Red'})
+                Write-Host "  DKIM Result: $($result.EmailHeaderDKIMResult)" -ForegroundColor $(if($result.EmailHeaderDKIMResult -eq 'pass'){'Green'}else{'Red'})
+                Write-Host "  DMARC Result: $($result.EmailHeaderDMARCResult)" -ForegroundColor $(if($result.EmailHeaderDMARCResult -eq 'pass'){'Green'}else{'Red'})
+                Write-Host "  DMARC Pass: $($result.EmailHeaderDMARCPass)" -ForegroundColor $(if($result.EmailHeaderDMARCPass -eq 'Yes'){'Green'}else{'Red'}) -BackgroundColor $(if($result.EmailHeaderDMARCPass -eq 'Yes'){'DarkGreen'}else{'DarkRed'})
+            }
         
             if ($recommendations.Count -gt 0) {
                 Write-Host "  Recommendations:" -ForegroundColor Yellow
@@ -2339,6 +2916,1524 @@ foreach ($result in $allResults) {
             line-height: 1.5;
             word-break: break-all;
             max-width: 0;
+        }
+        
+        /* Email Header Analysis Table Styles */
+        .email-header-section {
+            background: linear-gradient(135deg, #2c3e50 0%, #34495e 25%, #e74c3c 50%, #c0392b 75%, #8e44ad 100%);
+            background-size: 400% 400%;
+            animation: emailSecurityGradient 8s ease infinite;
+            border-radius: 20px;
+            padding: 35px;
+            margin: 30px 0;
+            box-shadow: 
+                0 20px 40px rgba(231, 76, 60, 0.3),
+                0 0 60px rgba(142, 68, 173, 0.2),
+                inset 0 1px 0 rgba(255,255,255,0.1);
+            color: white;
+            position: relative;
+            overflow: hidden;
+        }
+        .email-header-section::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: 
+                radial-gradient(circle at 20% 20%, rgba(255,255,255,0.1) 0%, transparent 50%),
+                radial-gradient(circle at 80% 80%, rgba(255,255,255,0.08) 0%, transparent 50%),
+                radial-gradient(circle at 40% 60%, rgba(52, 152, 219, 0.1) 0%, transparent 50%);
+            pointer-events: none;
+            animation: emailPatternMove 12s ease-in-out infinite;
+        }
+        .email-header-section::after {
+            position: absolute;
+            top: 15px;
+            right: 20px;
+            font-size: 1.2em;
+            opacity: 0.2;
+            animation: securityIconsFloat 6s ease-in-out infinite;
+            letter-spacing: 10px;
+        }
+        @keyframes emailSecurityGradient {
+            0% { background-position: 0% 50%; }
+            25% { background-position: 100% 50%; }
+            50% { background-position: 100% 100%; }
+            75% { background-position: 0% 100%; }
+            100% { background-position: 0% 50%; }
+        }
+        @keyframes emailPatternMove {
+            0%, 100% { 
+                transform: translateX(0) translateY(0); 
+                opacity: 0.3;
+            }
+            33% { 
+                transform: translateX(10px) translateY(-5px); 
+                opacity: 0.5;
+            }
+            66% { 
+                transform: translateX(-5px) translateY(10px); 
+                opacity: 0.4;
+            }
+        }
+        @keyframes securityIconsFloat {
+            0%, 100% { 
+                transform: translateY(0px) rotate(0deg); 
+                opacity: 0.2;
+            }
+            50% { 
+                transform: translateY(-8px) rotate(2deg); 
+                opacity: 0.3;
+            }
+        }
+        .email-header-title {
+            display: flex;
+            align-items: center;
+            gap: 20px;
+            margin-bottom: 25px;
+            font-size: 1.6em;
+            font-weight: 700;
+            text-shadow: 2px 2px 4px rgba(0,0,0,0.3);
+            position: relative;
+            z-index: 2;
+        }
+        .email-header-icon {
+            font-size: 1.4em;
+            background: linear-gradient(135deg, rgba(255,255,255,0.25), rgba(255,255,255,0.15));
+            padding: 15px;
+            border-radius: 12px;
+            box-shadow: 
+                0 8px 16px rgba(0,0,0,0.2),
+                inset 0 1px 0 rgba(255,255,255,0.3);
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(255,255,255,0.2);
+            transition: all 0.3s ease;
+        }
+        .email-header-icon:hover {
+            transform: scale(1.05) rotate(5deg);
+            background: linear-gradient(135deg, rgba(255,255,255,0.35), rgba(255,255,255,0.25));
+            box-shadow: 
+                0 12px 24px rgba(0,0,0,0.3),
+                inset 0 1px 0 rgba(255,255,255,0.4);
+        }
+        .header-analysis-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 20px;
+            margin-top: 20px;
+        }
+        .header-analysis-card {
+            background: linear-gradient(135deg, rgba(255,255,255,0.98) 0%, rgba(255,255,255,0.95) 100%);
+            color: #2c3e50;
+            border-radius: 15px;
+            padding: 25px;
+            box-shadow: 
+                0 10px 30px rgba(0,0,0,0.15),
+                0 0 20px rgba(255,255,255,0.1);
+            transition: all 0.4s ease;
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(255,255,255,0.3);
+            position: relative;
+            overflow: hidden;
+        }
+        .header-analysis-card::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            height: 3px;
+            background: linear-gradient(90deg, #3498db, #e74c3c, #9b59b6, #f39c12);
+            background-size: 300% 100%;
+            animation: cardBorderFlow 4s ease-in-out infinite;
+        }
+        @keyframes cardBorderFlow {
+            0%, 100% { background-position: 0% 50%; }
+            50% { background-position: 100% 50%; }
+        }
+        .header-analysis-card:hover {
+            transform: translateY(-8px) scale(1.02);
+            box-shadow: 
+                0 20px 40px rgba(0,0,0,0.2),
+                0 0 30px rgba(255,255,255,0.2);
+        }
+        .header-card-title {
+            font-size: 1.1em;
+            font-weight: 600;
+            margin-bottom: 15px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        .header-results-table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+        .header-results-table td {
+            padding: 12px 8px;
+            border-bottom: 1px solid #e9ecef;
+            vertical-align: middle;
+        }
+        .header-results-table td:first-child {
+            font-weight: 600;
+            color: #495057;
+            width: 40%;
+        }
+        .header-result-value {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        .result-status-icon {
+            font-size: 1.1em;
+            font-weight: bold;
+        }
+        .result-pass {
+            color: #28a745;
+        }
+        .result-fail {
+            color: #dc3545;
+        }
+        .result-none {
+            color: #6c757d;
+        }
+        .result-unknown {
+            color: #ffc107;
+        }
+        .dmarc-pass-highlight {
+            background: linear-gradient(135deg, #28a745, #20c997);
+            color: white;
+            padding: 8px 16px;
+            border-radius: 20px;
+            font-weight: bold;
+            text-align: center;
+            box-shadow: 0 2px 8px rgba(40, 167, 69, 0.3);
+            animation: pulse-glow 2s infinite;
+        }
+        .dmarc-fail-highlight {
+            background: linear-gradient(135deg, #dc3545, #c82333);
+            color: white;
+            padding: 8px 16px;
+            border-radius: 20px;
+            font-weight: bold;
+            text-align: center;
+            box-shadow: 0 2px 8px rgba(220, 53, 69, 0.3);
+        }
+        @keyframes pulse-glow {
+            0%, 100% { box-shadow: 0 2px 8px rgba(40, 167, 69, 0.3); }
+            50% { box-shadow: 0 4px 20px rgba(40, 167, 69, 0.6); }
+        }
+        .header-domain-info {
+            background: linear-gradient(135deg, rgba(255,255,255,0.15), rgba(255,255,255,0.08));
+            border-radius: 12px;
+            padding: 20px;
+            margin-top: 20px;
+            backdrop-filter: blur(15px);
+            border: 1px solid rgba(255,255,255,0.2);
+            box-shadow: 
+                0 8px 16px rgba(0,0,0,0.1),
+                inset 0 1px 0 rgba(255,255,255,0.2);
+        }
+        .domain-comparison {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 20px;
+            margin-top: 15px;
+        }
+        .domain-item {
+            background: linear-gradient(135deg, rgba(255,255,255,0.2), rgba(255,255,255,0.1));
+            padding: 15px;
+            border-radius: 10px;
+            font-size: 0.95em;
+            backdrop-filter: blur(8px);
+            border: 1px solid rgba(255,255,255,0.15);
+            transition: all 0.3s ease;
+        }
+        .domain-item:hover {
+            background: linear-gradient(135deg, rgba(255,255,255,0.25), rgba(255,255,255,0.15));
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+        }
+        .domain-label {
+            font-weight: 700;
+            margin-bottom: 8px;
+            opacity: 0.95;
+            font-size: 0.9em;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+        .domain-value {
+            font-family: 'Courier New', Monaco, 'Lucida Console', monospace;
+            background: linear-gradient(135deg, rgba(0,0,0,0.15), rgba(0,0,0,0.1));
+            padding: 8px 12px;
+            border-radius: 6px;
+            word-break: break-all;
+            font-size: 0.9em;
+            border: 1px solid rgba(0,0,0,0.1);
+        }
+        
+        /* Enhanced DMARC Condition Styles */
+        .condition-card {
+            background: linear-gradient(135deg, rgba(255,255,255,0.15), rgba(255,255,255,0.08));
+            border-radius: 12px;
+            padding: 18px;
+            margin: 12px 0;
+            border-left: 4px solid transparent;
+            backdrop-filter: blur(8px);
+            transition: all 0.3s ease;
+        }
+        .condition-card:hover {
+            transform: translateX(5px);
+            box-shadow: 0 8px 25px rgba(0,0,0,0.15);
+        }
+        .condition-met {
+            border-left-color: #28a745;
+            background: linear-gradient(135deg, rgba(40, 167, 69, 0.15), rgba(32, 201, 151, 0.08));
+        }
+        .condition-not-met {
+            border-left-color: #dc3545;
+            background: linear-gradient(135deg, rgba(220, 53, 69, 0.15), rgba(200, 35, 51, 0.08));
+        }
+        .condition-header {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            margin-bottom: 10px;
+            font-weight: 700;
+            font-size: 1em;
+        }
+        .condition-status-badge {
+            padding: 6px 12px;
+            border-radius: 20px;
+            font-size: 0.85em;
+            font-weight: 800;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            box-shadow: 0 3px 10px rgba(0,0,0,0.2);
+        }
+        .condition-status-met {
+            background: linear-gradient(135deg, #28a745, #20c997);
+            color: white;
+            animation: condition-success-pulse 2s infinite;
+        }
+        .condition-status-not-met {
+            background: linear-gradient(135deg, #dc3545, #c82333);
+            color: white;
+        }
+        @keyframes condition-success-pulse {
+            0%, 100% { 
+                box-shadow: 0 3px 10px rgba(40, 167, 69, 0.3);
+                transform: scale(1);
+            }
+            50% { 
+                box-shadow: 0 6px 20px rgba(40, 167, 69, 0.6);
+                transform: scale(1.05);
+            }
+        }
+        .condition-details {
+            font-size: 0.9em;
+            line-height: 1.5;
+            opacity: 0.95;
+        }
+        .condition-check-item {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin: 6px 0;
+            padding: 4px 0;
+        }
+        .condition-check-icon {
+            font-size: 1.1em;
+            font-weight: bold;
+            min-width: 20px;
+        }
+        .condition-check-pass {
+            color: #28a745;
+        }
+        .condition-check-fail {
+            color: #dc3545;
+        }
+        
+        /* New User-Friendly Email Header Analysis Styles */
+        .email-header-main-title {
+            display: flex;
+            align-items: center;
+            gap: 20px;
+            margin-bottom: 30px;
+            padding: 25px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            border-radius: 15px;
+            color: white;
+            box-shadow: 0 10px 30px rgba(102, 126, 234, 0.3);
+        }
+        .main-title-icon {
+            font-size: 2.5em;
+            background: rgba(255,255,255,0.2);
+            padding: 15px;
+            border-radius: 50%;
+            animation: float 3s ease-in-out infinite;
+        }
+        @keyframes float {
+            0%, 100% { transform: translateY(0px); }
+            50% { transform: translateY(-10px); }
+        }
+        .main-title-content h2 {
+            margin: 0;
+            font-size: 2em;
+            font-weight: 700;
+            text-shadow: 0 2px 4px rgba(0,0,0,0.2);
+        }
+        .main-title-subtitle {
+            margin: 5px 0 0 0;
+            font-size: 1.1em;
+            opacity: 0.9;
+            font-weight: 300;
+        }
+        
+        .overall-result-banner {
+            border-radius: 15px;
+            padding: 25px;
+            margin: 25px 0;
+            box-shadow: 0 8px 25px rgba(0,0,0,0.15);
+            backdrop-filter: blur(10px);
+        }
+        .result-banner-pass {
+            background: linear-gradient(135deg, #28a745 0%, #20c997 100%);
+            border: 2px solid rgba(40, 167, 69, 0.3);
+        }
+        .result-banner-fail {
+            background: linear-gradient(135deg, #dc3545 0%, #c82333 100%);
+            border: 2px solid rgba(220, 53, 69, 0.3);
+        }
+        .result-banner-content {
+            display: flex;
+            align-items: center;
+            gap: 20px;
+            color: white;
+        }
+        .result-banner-icon {
+            font-size: 3em;
+            background: rgba(255,255,255,0.2);
+            padding: 20px;
+            border-radius: 50%;
+            animation: result-pulse 2s infinite;
+        }
+        @keyframes result-pulse {
+            0%, 100% { transform: scale(1); opacity: 1; }
+            50% { transform: scale(1.1); opacity: 0.8; }
+        }
+        .result-banner-main {
+            font-size: 1.8em;
+            font-weight: 800;
+            margin-bottom: 8px;
+            text-shadow: 0 2px 4px rgba(0,0,0,0.3);
+        }
+        .result-banner-detail {
+            font-size: 1.1em;
+            opacity: 0.9;
+            line-height: 1.4;
+        }
+        
+        .auth-flow-container {
+            background: white;
+            border-radius: 15px;
+            padding: 30px;
+            box-shadow: 0 5px 20px rgba(0,0,0,0.1);
+            margin: 25px 0;
+        }
+        .flow-title {
+            font-size: 1.6em;
+            font-weight: 700;
+            color: #2c3e50;
+            margin-bottom: 30px;
+            text-align: center;
+            padding-bottom: 15px;
+            border-bottom: 3px solid #e9ecef;
+        }
+        .auth-step {
+            margin: 40px 0;
+            position: relative;
+        }
+        .auth-step::before {
+            content: '';
+            position: absolute;
+            left: 35px;
+            top: 50px;
+            bottom: -20px;
+            width: 2px;
+            background: linear-gradient(to bottom, #007bff, #6c757d);
+            opacity: 0.3;
+        }
+        .auth-step:last-child::before {
+            display: none;
+        }
+        .step-header {
+            display: flex;
+            align-items: center;
+            gap: 15px;
+            margin-bottom: 25px;
+        }
+        .step-number {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            width: 50px;
+            height: 50px;
+            background: linear-gradient(135deg, #007bff, #6610f2);
+            color: white;
+            border-radius: 50%;
+            font-size: 1.3em;
+            font-weight: 800;
+            box-shadow: 0 4px 15px rgba(0, 123, 255, 0.3);
+            position: relative;
+            z-index: 2;
+        }
+        .step-title {
+            font-size: 1.3em;
+            font-weight: 600;
+            color: #2c3e50;
+        }
+        
+        .protocol-results-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+            gap: 25px;
+            margin: 20px 0;
+        }
+        .protocol-card {
+            background: linear-gradient(135deg, #f8f9fa 0%, #e9ecef 100%);
+            border-radius: 15px;
+            padding: 25px;
+            text-align: center;
+            box-shadow: 0 5px 20px rgba(0,0,0,0.08);
+            transition: all 0.3s ease;
+            border-top: 4px solid transparent;
+        }
+        .protocol-card:hover {
+            transform: translateY(-8px);
+            box-shadow: 0 15px 35px rgba(0,0,0,0.15);
+        }
+        .protocol-card:nth-child(1) { border-top-color: #28a745; }
+        .protocol-card:nth-child(2) { border-top-color: #6f42c1; }
+        .protocol-card:nth-child(3) { border-top-color: #fd7e14; }
+        .protocol-icon {
+            font-size: 2.5em;
+            margin-bottom: 15px;
+            padding: 20px;
+            border-radius: 50%;
+            color: white;
+            display: inline-block;
+        }
+        .spf-icon {
+            background: linear-gradient(135deg, #28a745, #20c997);
+        }
+        .dkim-icon {
+            background: linear-gradient(135deg, #6f42c1, #e83e8c);
+        }
+        .dmarc-icon {
+            background: linear-gradient(135deg, #fd7e14, #ffc107);
+        }
+        .protocol-name {
+            font-size: 1.4em;
+            font-weight: 700;
+            color: #2c3e50;
+            margin-bottom: 5px;
+        }
+        .protocol-description {
+            font-size: 0.9em;
+            color: #6c757d;
+            margin-bottom: 20px;
+        }
+        .protocol-result {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 10px;
+            padding: 12px 20px;
+            border-radius: 25px;
+            font-weight: 700;
+            margin-bottom: 15px;
+        }
+        .protocol-pass {
+            background: linear-gradient(135deg, #28a745, #20c997);
+            color: white;
+            box-shadow: 0 4px 15px rgba(40, 167, 69, 0.3);
+        }
+        .protocol-fail {
+            background: linear-gradient(135deg, #dc3545, #c82333);
+            color: white;
+            box-shadow: 0 4px 15px rgba(220, 53, 69, 0.3);
+        }
+        .protocol-unknown {
+            background: linear-gradient(135deg, #ffc107, #fd7e14);
+            color: white;
+            box-shadow: 0 4px 15px rgba(255, 193, 7, 0.3);
+        }
+        .protocol-status-icon {
+            font-size: 1.2em;
+        }
+        .protocol-explanation {
+            font-size: 0.85em;
+            color: #495057;
+            line-height: 1.4;
+            font-style: italic;
+        }
+        
+        .domain-alignment-explanation {
+            background: #f8f9fa;
+            border-left: 4px solid #007bff;
+            padding: 15px 20px;
+            margin: 20px 0;
+            border-radius: 8px;
+            font-size: 0.95em;
+            color: #495057;
+        }
+        .domain-comparison-modern {
+            display: flex;
+            flex-direction: column;
+            gap: 30px;
+            margin: 25px 0;
+        }
+        .domain-pair {
+            display: grid;
+            grid-template-columns: 1fr auto 1fr;
+            gap: 20px;
+            align-items: center;
+        }
+        .domain-info-card {
+            background: linear-gradient(135deg, #ffffff 0%, #f8f9fa 100%);
+            border-radius: 12px;
+            padding: 20px;
+            box-shadow: 0 3px 15px rgba(0,0,0,0.08);
+            text-align: center;
+            border: 2px solid #e9ecef;
+            transition: all 0.3s ease;
+        }
+        .domain-info-card:hover {
+            transform: translateY(-3px);
+            box-shadow: 0 8px 25px rgba(0,0,0,0.12);
+            border-color: #007bff;
+        }
+        .domain-card-header {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 10px;
+            margin-bottom: 15px;
+        }
+        .domain-icon {
+            font-size: 1.5em;
+            color: #007bff;
+        }
+        .domain-type {
+            font-weight: 600;
+            color: #2c3e50;
+            font-size: 1.1em;
+        }
+        .domain-value-display {
+            font-family: 'Courier New', monospace;
+            background: #e9ecef;
+            padding: 12px 16px;
+            border-radius: 8px;
+            font-weight: 600;
+            color: #495057;
+            margin-bottom: 10px;
+            word-break: break-all;
+            border: 1px solid #dee2e6;
+        }
+        .domain-description {
+            font-size: 0.85em;
+            color: #6c757d;
+            line-height: 1.3;
+        }
+        .alignment-arrow {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 5px;
+            color: #007bff;
+        }
+        .arrow-icon {
+            font-size: 2em;
+            font-weight: bold;
+        }
+        .alignment-text {
+            font-size: 0.8em;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+        .alignment-status {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+        }
+        .alignment-result {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 12px 20px;
+            border-radius: 25px;
+            font-weight: 700;
+            font-size: 1.1em;
+        }
+        .alignment-pass {
+            background: linear-gradient(135deg, #28a745, #20c997);
+            color: white;
+            box-shadow: 0 4px 15px rgba(40, 167, 69, 0.3);
+        }
+        .alignment-fail {
+            background: linear-gradient(135deg, #dc3545, #c82333);
+            color: white;
+            box-shadow: 0 4px 15px rgba(220, 53, 69, 0.3);
+        }
+        
+        .dmarc-conditions-explanation {
+            background: linear-gradient(135deg, #e3f2fd 0%, #bbdefb 100%);
+            border-left: 4px solid #2196f3;
+            padding: 20px;
+            margin: 25px 0;
+            border-radius: 10px;
+            color: #1565c0;
+        }
+        .dmarc-conditions-explanation p {
+            margin: 0;
+            font-size: 1.05em;
+            font-weight: 500;
+        }
+        .conditions-container {
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+            margin: 25px 0;
+        }
+        .condition-modern {
+            background: linear-gradient(135deg, #ffffff 0%, #f8f9fa 100%);
+            border-radius: 15px;
+            padding: 25px;
+            box-shadow: 0 5px 20px rgba(0,0,0,0.08);
+            border: 2px solid transparent;
+            transition: all 0.3s ease;
+        }
+        .condition-modern:hover {
+            transform: translateY(-3px);
+            box-shadow: 0 15px 35px rgba(0,0,0,0.12);
+        }
+        .condition-success {
+            border-color: #28a745;
+            background: linear-gradient(135deg, #f8fff9 0%, #e8f5e8 100%);
+        }
+        .condition-failure {
+            border-color: #dc3545;
+            background: linear-gradient(135deg, #fff8f8 0%, #f5e8e8 100%);
+        }
+        .condition-main-header {
+            display: grid;
+            grid-template-columns: auto 1fr auto;
+            gap: 20px;
+            align-items: center;
+            margin-bottom: 20px;
+        }
+        .condition-number {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            width: 50px;
+            height: 50px;
+            background: linear-gradient(135deg, #6c757d, #495057);
+            color: white;
+            border-radius: 50%;
+            font-size: 1.4em;
+            font-weight: 800;
+            box-shadow: 0 4px 15px rgba(108, 117, 125, 0.3);
+        }
+        .condition-success .condition-number {
+            background: linear-gradient(135deg, #28a745, #20c997);
+        }
+        .condition-failure .condition-number {
+            background: linear-gradient(135deg, #dc3545, #c82333);
+        }
+        .condition-title-section {
+            text-align: left;
+        }
+        .condition-title {
+            font-size: 1.3em;
+            font-weight: 700;
+            color: #2c3e50;
+            margin-bottom: 5px;
+        }
+        .condition-subtitle {
+            font-size: 0.95em;
+            color: #6c757d;
+            font-weight: 500;
+        }
+        .condition-main-status {
+            text-align: right;
+        }
+        .main-status-badge {
+            padding: 10px 20px;
+            border-radius: 25px;
+            font-size: 1em;
+            font-weight: 800;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.2);
+        }
+        .status-met {
+            background: linear-gradient(135deg, #28a745, #20c997);
+            color: white;
+            animation: success-glow 2s infinite;
+        }
+        .status-not-met {
+            background: linear-gradient(135deg, #dc3545, #c82333);
+            color: white;
+        }
+        @keyframes success-glow {
+            0%, 100% { box-shadow: 0 4px 15px rgba(40, 167, 69, 0.3); }
+            50% { box-shadow: 0 8px 30px rgba(40, 167, 69, 0.6); }
+        }
+        .condition-requirements {
+            display: flex;
+            flex-direction: column;
+            gap: 15px;
+        }
+        .requirement-item {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            padding: 15px 20px;
+            background: rgba(255,255,255,0.8);
+            border-radius: 10px;
+            border: 1px solid #e9ecef;
+            transition: all 0.3s ease;
+        }
+        .requirement-item:hover {
+            transform: translateX(5px);
+            box-shadow: 0 3px 10px rgba(0,0,0,0.1);
+        }
+        .requirement-met {
+            border-left: 4px solid #28a745;
+            background: linear-gradient(135deg, rgba(40, 167, 69, 0.05), rgba(255,255,255,0.8));
+        }
+        .requirement-not-met {
+            border-left: 4px solid #dc3545;
+            background: linear-gradient(135deg, rgba(220, 53, 69, 0.05), rgba(255,255,255,0.8));
+        }
+        .requirement-icon {
+            font-size: 1.3em;
+            font-weight: bold;
+            min-width: 20px;
+        }
+        .requirement-text {
+            font-size: 1em;
+            font-weight: 500;
+            color: #2c3e50;
+        }
+        .or-separator {
+            text-align: center;
+            margin: 15px 0;
+            position: relative;
+        }
+        .or-separator::before {
+            content: '';
+            position: absolute;
+            top: 50%;
+            left: 0;
+            right: 0;
+            height: 1px;
+            background: #dee2e6;
+            z-index: 1;
+        }
+        .or-text {
+            background: #ffffff;
+            padding: 10px 20px;
+            border-radius: 25px;
+            border: 2px solid #dee2e6;
+            font-weight: 700;
+            color: #6c757d;
+            position: relative;
+            z-index: 2;
+            font-size: 1.1em;
+        }
+        
+        .final-result-modern {
+            margin: 30px 0;
+            text-align: center;
+        }
+        .final-result-content {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 25px;
+            padding: 30px;
+            border-radius: 20px;
+            backdrop-filter: blur(10px);
+            border: 3px solid transparent;
+        }
+        .final-success {
+            background: linear-gradient(135deg, #28a745 0%, #20c997 100%);
+            border-color: rgba(40, 167, 69, 0.3);
+            color: white;
+            box-shadow: 0 10px 30px rgba(40, 167, 69, 0.3);
+        }
+        .final-failure {
+            background: linear-gradient(135deg, #dc3545 0%, #c82333 100%);
+            border-color: rgba(220, 53, 69, 0.3);
+            color: white;
+            box-shadow: 0 10px 30px rgba(220, 53, 69, 0.3);
+        }
+        .final-result-icon {
+            font-size: 4em;
+            animation: final-bounce 2s infinite;
+        }
+        @keyframes final-bounce {
+            0%, 20%, 50%, 80%, 100% { transform: translateY(0); }
+            40% { transform: translateY(-10px); }
+            60% { transform: translateY(-5px); }
+        }
+        .final-result-text {
+            text-align: left;
+            flex: 1;
+        }
+        .final-result-title {
+            font-size: 1.8em;
+            font-weight: 800;
+            margin-bottom: 10px;
+            text-shadow: 0 2px 4px rgba(0,0,0,0.3);
+        }
+        .final-result-explanation {
+            font-size: 1.1em;
+            opacity: 0.95;
+            line-height: 1.5;
+            font-weight: 400;
+        }
+        
+        /* Responsive Design for Mobile */
+        @media (max-width: 768px) {
+            .protocol-results-grid {
+                grid-template-columns: 1fr;
+            }
+            .domain-pair {
+                grid-template-columns: 1fr;
+                text-align: center;
+            }
+            .alignment-arrow {
+                transform: rotate(90deg);
+            }
+            .condition-main-header {
+                grid-template-columns: 1fr;
+                text-align: center;
+                gap: 15px;
+            }
+            .final-result-content {
+                flex-direction: column;
+                text-align: center;
+            }
+            .final-result-text {
+                text-align: center;
+            }
+        }
+        
+        /* Modern Authentication Process Breakdown Styles */
+        .auth-flow-container-clear {
+            background: rgba(255,255,255,0.05);
+            border-radius: 12px;
+            padding: 20px;
+            margin: 20px 0;
+        }
+        .flow-title-modern {
+            text-align: center;
+            margin-bottom: 30px;
+            color: white;
+        }
+        .flow-icon {
+            font-size: 2em;
+            margin-bottom: 10px;
+            display: block;
+        }
+        .flow-title-modern h3 {
+            margin: 5px 0;
+            font-size: 1.6em;
+            font-weight: 700;
+        }
+        .flow-subtitle {
+            font-size: 1em;
+            opacity: 0.9;
+            margin: 0;
+        }
+        .auth-step-clear {
+            background: rgba(255,255,255,0.95);
+            color: #2c3e50;
+            border-radius: 12px;
+            margin: 25px 0;
+            box-shadow: 0 4px 20px rgba(0,0,0,0.1);
+            overflow: hidden;
+            position: relative;
+        }
+        .auth-step-clear::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            height: 4px;
+            background: linear-gradient(90deg, #667eea 0%, #764ba2 100%);
+        }
+        .step-1::before {
+            background: linear-gradient(90deg, #28a745 0%, #20c997 100%);
+        }
+        .step-2::before {
+            background: linear-gradient(90deg, #007bff 0%, #6610f2 100%);
+        }
+        .step-3::before {
+            background: linear-gradient(90deg, #fd7e14 0%, #e83e8c 100%);
+        }
+        .step-4::before {
+            background: linear-gradient(90deg, #6f42c1 0%, #e83e8c 100%);
+        }
+        .step-header-modern {
+            display: flex;
+            align-items: flex-start;
+            gap: 15px;
+            padding: 20px 25px 15px;
+            background: rgba(248,249,250,0.5);
+            border-bottom: 1px solid rgba(0,0,0,0.1);
+        }
+        .step-indicator {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            position: relative;
+        }
+        .step-number-modern {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border-radius: 50%;
+            width: 40px;
+            height: 40px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: 700;
+            font-size: 1.2em;
+            box-shadow: 0 3px 10px rgba(0,0,0,0.2);
+        }
+        .step-1 .step-number-modern {
+            background: linear-gradient(135deg, #28a745 0%, #20c997 100%);
+        }
+        .step-2 .step-number-modern {
+            background: linear-gradient(135deg, #007bff 0%, #6610f2 100%);
+        }
+        .step-3 .step-number-modern {
+            background: linear-gradient(135deg, #fd7e14 0%, #e83e8c 100%);
+        }
+        .step-4 .step-number-modern {
+            background: linear-gradient(135deg, #6f42c1 0%, #e83e8c 100%);
+        }
+        .step-connector {
+            width: 2px;
+            height: 30px;
+            background: linear-gradient(to bottom, rgba(102,126,234,0.3), transparent);
+            margin-top: 10px;
+        }
+        .step-4 .step-connector {
+            display: none;
+        }
+        .step-content-header {
+            flex: 1;
+        }
+        .step-title-modern {
+            margin: 0 0 5px 0;
+            font-size: 1.3em;
+            font-weight: 700;
+            color: #2c3e50;
+        }
+        .step-description {
+            margin: 0;
+            font-size: 0.95em;
+            color: #6c757d;
+        }
+        .step-body {
+            padding: 20px 25px 25px;
+        }
+        .info-box {
+            background: rgba(23,162,184,0.1);
+            border-left: 4px solid #17a2b8;
+            padding: 12px 15px;
+            margin-bottom: 20px;
+            border-radius: 0 6px 6px 0;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        .info-icon {
+            font-size: 1.2em;
+        }
+        .protocol-results-grid-modern {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+            gap: 20px;
+        }
+        .protocol-card-modern {
+            background: white;
+            border: 2px solid #e9ecef;
+            border-radius: 10px;
+            padding: 20px;
+            transition: all 0.3s ease;
+            position: relative;
+            overflow: hidden;
+        }
+        .protocol-card-modern:hover {
+            transform: translateY(-3px);
+            box-shadow: 0 8px 25px rgba(0,0,0,0.15);
+        }
+        .spf-card {
+            border-color: #28a745;
+        }
+        .dkim-card {
+            border-color: #6f42c1;
+        }
+        .dmarc-card {
+            border-color: #007bff;
+        }
+        .protocol-header-modern {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            margin-bottom: 15px;
+        }
+        .protocol-icon-modern {
+            font-size: 2em;
+            padding: 10px;
+            border-radius: 8px;
+            color: white;
+        }
+        .spf-icon-modern {
+            background: linear-gradient(135deg, #28a745, #20c997);
+        }
+        .dkim-icon-modern {
+            background: linear-gradient(135deg, #6f42c1, #e83e8c);
+        }
+        .dmarc-icon-modern {
+            background: linear-gradient(135deg, #007bff, #6610f2);
+        }
+        .compauth-icon-modern {
+            background: linear-gradient(135deg, #17a2b8, #20c997);
+        }
+        .reason-icon-modern {
+            background: linear-gradient(135deg, #ffc107, #fd7e14);
+        }
+        .ucf-icon-modern {
+            background: linear-gradient(135deg, #667eea, #764ba2);
+        }
+        .jmr-icon-modern {
+            background: linear-gradient(135deg, #f093fb, #f5576c);
+        }
+        .dest-icon-modern {
+            background: linear-gradient(135deg, #4facfe, #00f2fe);
+        }
+        .ofr-icon-modern {
+            background: linear-gradient(135deg, #fa709a, #fee140);
+        }
+        .compauth-card {
+            border-color: #17a2b8;
+        }
+        .reason-card {
+            border-color: #ffc107;
+        }
+        .ucf-card {
+            border-color: #667eea;
+        }
+        .jmr-card {
+            border-color: #f093fb;
+        }
+        .dest-card {
+            border-color: #4facfe;
+        }
+        .ofr-card {
+            border-color: #fa709a;
+        }
+        .protocol-info {
+            flex: 1;
+        }
+        .protocol-name-modern {
+            font-size: 1.3em;
+            font-weight: 700;
+            color: #2c3e50;
+        }
+        .protocol-description-modern {
+            font-size: 0.9em;
+            color: #6c757d;
+        }
+        .protocol-result-modern {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin-bottom: 10px;
+            padding: 8px 12px;
+            border-radius: 6px;
+            font-weight: 600;
+        }
+        .protocol-info-modern {
+            background: rgba(108,117,125,0.1);
+            color: #495057;
+            border: 1px solid rgba(108,117,125,0.3);
+        }
+        .protocol-pass-modern {
+            background: rgba(40,167,69,0.1);
+            color: #155724;
+            border: 1px solid rgba(40,167,69,0.3);
+        }
+        .protocol-fail-modern {
+            background: rgba(220,53,69,0.1);
+            color: #721c24;
+            border: 1px solid rgba(220,53,69,0.3);
+        }
+        .protocol-unknown-modern {
+            background: rgba(108,117,125,0.1);
+            color: #495057;
+            border: 1px solid rgba(108,117,125,0.3);
+        }
+        .protocol-status-icon-modern {
+            font-size: 1.1em;
+        }
+        .protocol-explanation-modern {
+            font-size: 0.9em;
+            color: #6c757d;
+            line-height: 1.4;
+        }
+        .domain-alignment-explanation-modern {
+            margin-bottom: 20px;
+        }
+        .domain-comparison-ultra-modern {
+            display: flex;
+            flex-direction: column;
+            gap: 25px;
+        }
+        .domain-pair-modern {
+            display: grid;
+            grid-template-columns: 1fr auto 1fr;
+            gap: 20px;
+            align-items: center;
+        }
+        .domain-pair-modern.single-pair {
+            grid-template-columns: 1fr auto 1fr auto;
+            gap: 15px;
+        }
+        .domain-info-card-modern {
+            background: white;
+            border: 2px solid #e9ecef;
+            border-radius: 10px;
+            padding: 15px;
+            text-align: center;
+        }
+        .envelope-card {
+            border-color: #17a2b8;
+        }
+        .header-card {
+            border-color: #28a745;
+        }
+        .dkim-card {
+            border-color: #6f42c1;
+        }
+        .domain-card-header-modern {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            margin-bottom: 10px;
+            justify-content: center;
+        }
+        .domain-icon-modern {
+            font-size: 1.5em;
+            color: #007bff;
+        }
+        .domain-type-info {
+            text-align: left;
+        }
+        .domain-type-modern {
+            font-weight: 600;
+            font-size: 0.9em;
+            color: #2c3e50;
+            display: block;
+        }
+        .domain-type-desc {
+            font-size: 0.8em;
+            color: #6c757d;
+            display: block;
+        }
+        .domain-value-display-modern {
+            background: rgba(0,123,255,0.1);
+            border: 1px solid rgba(0,123,255,0.3);
+            border-radius: 6px;
+            padding: 8px 12px;
+            font-family: monospace;
+            font-weight: 600;
+            color: #0056b3;
+            word-break: break-all;
+        }
+        .alignment-arrow-modern {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 5px;
+            color: #6c757d;
+        }
+        .arrow-line {
+            width: 30px;
+            height: 1px;
+            background: #6c757d;
+        }
+        .arrow-icon-modern {
+            font-size: 1.5em;
+            color: #007bff;
+        }
+        .alignment-text-modern {
+            font-size: 0.8em;
+            font-weight: 600;
+            text-transform: uppercase;
+        }
+        .alignment-status-modern {
+            text-align: center;
+        }
+        .alignment-result-modern {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            padding: 10px 15px;
+            border-radius: 8px;
+            font-weight: 600;
+        }
+        .alignment-pass-modern {
+            background: rgba(40,167,69,0.1);
+            color: #155724;
+            border: 2px solid rgba(40,167,69,0.3);
+        }
+        .alignment-fail-modern {
+            background: rgba(220,53,69,0.1);
+            color: #721c24;
+            border: 2px solid rgba(220,53,69,0.3);
+        }
+        .alignment-icon-modern {
+            font-size: 1.2em;
+        }
+        .alignment-text-container {
+            text-align: left;
+        }
+        .alignment-label-modern {
+            display: block;
+            font-weight: 700;
+        }
+        .alignment-detail {
+            display: block;
+            font-size: 0.8em;
+            opacity: 0.8;
+        }
+        .dmarc-conditions-explanation-modern {
+            margin-bottom: 20px;
+        }
+        .conditions-container-modern {
+            display: flex;
+            align-items: stretch;
+            gap: 20px;
+        }
+        .condition-ultra-modern {
+            flex: 1;
+            background: white;
+            border: 2px solid #e9ecef;
+            border-radius: 10px;
+            padding: 20px;
+            transition: all 0.3s ease;
+        }
+        .condition-success-modern {
+            border-color: #28a745;
+            background: rgba(40,167,69,0.02);
+        }
+        .condition-failure-modern {
+            border-color: #dc3545;
+            background: rgba(220,53,69,0.02);
+        }
+        .condition-main-header-modern {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            margin-bottom: 15px;
+        }
+        .condition-number-modern {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border-radius: 50%;
+            width: 35px;
+            height: 35px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: 700;
+            font-size: 1.1em;
+        }
+        .condition-title-section-modern {
+            flex: 1;
+        }
+        .condition-title-main {
+            font-weight: 700;
+            font-size: 1.1em;
+            color: #2c3e50;
+            margin-bottom: 3px;
+        }
+        .condition-subtitle-modern {
+            font-size: 0.85em;
+            color: #6c757d;
+        }
+        .condition-main-status-modern {
+            margin-left: auto;
+        }
+        .main-status-badge-modern {
+            padding: 6px 12px;
+            border-radius: 6px;
+            font-weight: 700;
+            font-size: 0.85em;
+        }
+        .status-met-modern {
+            background: rgba(40,167,69,0.1);
+            color: #155724;
+            border: 1px solid rgba(40,167,69,0.3);
+        }
+        .status-not-met-modern {
+            background: rgba(220,53,69,0.1);
+            color: #721c24;
+            border: 1px solid rgba(220,53,69,0.3);
+        }
+        .condition-requirements-modern {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+        .requirement-item-modern {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 8px 12px;
+            border-radius: 6px;
+            font-size: 0.9em;
+        }
+        .requirement-met-modern {
+            background: rgba(40,167,69,0.05);
+            border-left: 3px solid #28a745;
+        }
+        .requirement-not-met-modern {
+            background: rgba(220,53,69,0.05);
+            border-left: 3px solid #dc3545;
+        }
+        .requirement-icon-modern {
+            font-size: 1em;
+        }
+        .requirement-text-modern {
+            flex: 1;
+        }
+        .or-separator-modern {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            gap: 10px;
+            min-width: 50px;
+        }
+        .or-line {
+            width: 1px;
+            height: 30px;
+            background: #dee2e6;
+        }
+        .or-text-modern {
+            background: #f8f9fa;
+            color: #6c757d;
+            padding: 8px 12px;
+            border-radius: 20px;
+            font-weight: 700;
+            font-size: 0.8em;
+            border: 2px solid #dee2e6;
+        }
+        .final-result-ultra-modern {
+            text-align: center;
+        }
+        .final-result-content-modern {
+            background: white;
+            border: 3px solid #e9ecef;
+            border-radius: 15px;
+            padding: 30px;
+            text-align: center;
+            position: relative;
+            overflow: hidden;
+        }
+        .final-success-modern {
+            border-color: #28a745;
+            background: linear-gradient(135deg, rgba(40,167,69,0.05) 0%, rgba(32,201,151,0.05) 100%);
+        }
+        .final-failure-modern {
+            border-color: #dc3545;
+            background: linear-gradient(135deg, rgba(220,53,69,0.05) 0%, rgba(200,35,51,0.05) 100%);
+        }
+        .final-result-icon-modern {
+            font-size: 4em;
+            margin-bottom: 15px;
+            display: block;
+        }
+        .final-result-title-modern {
+            font-size: 1.8em;
+            font-weight: 800;
+            margin-bottom: 15px;
+            color: #2c3e50;
+        }
+        .final-result-explanation-modern {
+            font-size: 1.1em;
+            color: #495057;
+            line-height: 1.6;
+            margin-bottom: 20px;
+        }
+        .final-result-actions {
+            margin-top: 20px;
+        }
+        .action-recommendation {
+            background: rgba(0,123,255,0.1);
+            border: 1px solid rgba(0,123,255,0.3);
+            border-radius: 8px;
+            padding: 12px 20px;
+            font-weight: 600;
+            color: #0056b3;
+        }
+        
+        /* Mobile Responsive for Modern Design */
+        @media (max-width: 768px) {
+            .protocol-results-grid-modern {
+                grid-template-columns: 1fr;
+            }
+            .domain-pair-modern {
+                grid-template-columns: 1fr;
+                gap: 15px;
+                text-align: center;
+            }
+            .alignment-arrow-modern {
+                transform: rotate(90deg);
+            }
+            .conditions-container-modern {
+                flex-direction: column;
+                gap: 15px;
+            }
+            .or-separator-modern {
+                flex-direction: row;
+                min-width: auto;
+                margin: 10px 0;
+            }
+            .or-line {
+                width: 30px;
+                height: 1px;
+            }
+            .step-header-modern {
+                padding: 15px 20px 10px;
+            }
+            .step-body {
+                padding: 15px 20px 20px;
+            }
         }
         
         /* Donut Chart Styles */
@@ -2983,7 +5078,7 @@ foreach ($result in $allResults) {
                 'Strict All Mechanism': 'Uses ~all or -all for proper email protection',
                 'Syntax Valid': 'Record follows correct syntax standards',
                 'Reporting Configured': 'RUA/RUF tags configured for DMARC reporting',
-                'Strong Policy': 'Uses quarantine or reject policy for security',
+                'Strong Policy (reject only)': 'Only reject policy provides maximum security - quarantine is considered weak',
                 'Keys Active': 'DKIM keys are active and not revoked',
                 'Strong Keys': 'Key lengths meet security standards (1024+ bits)',
                 'Subdomain Policy': 'Explicit DKIM policy configuration for subdomains',
@@ -3146,11 +5241,12 @@ foreach ($result in $allResults) {
     $progressWidth = $result.Score
     $progressText = "$($result.Score)%"
     
-    # Set progress bar color based on score
-    $progressColor = if ($result.Score -ge 80) { "linear-gradient(90deg, #28a745 0%, #20c997 100%)" }
-                     elseif ($result.Score -ge 60) { "linear-gradient(90deg, #17a2b8 0%, #138496 100%)" }
-                     elseif ($result.Score -ge 40) { "linear-gradient(90deg, #ffc107 0%, #e0a800 100%)" }
-                     else { "linear-gradient(90deg, #fd7e14 0%, #e55353 100%)" }
+    # Set progress bar color based on score with enhanced thresholds
+    $progressColor = if ($result.Score -ge 95) { "linear-gradient(90deg, #28a745 0%, #20c997 100%)" }  # Excellent (95+)
+                     elseif ($result.Score -ge 85) { "linear-gradient(90deg, #17a2b8 0%, #138496 100%)" }  # Good (85-94)
+                     elseif ($result.Score -ge 65) { "linear-gradient(90deg, #ffc107 0%, #e0a800 100%)" }  # Fair (65-84)
+                     elseif ($result.Score -ge 40) { "linear-gradient(90deg, #fd7e14 0%, #e55353 100%)" }  # Poor (40-64)
+                     else { "linear-gradient(90deg, #dc3545 0%, #b02a37 100%)" }  # Critical (<40)
     
     $html += @"
     <div class="domain-section">
@@ -3499,6 +5595,508 @@ $(if($result.DKIMProviders -and $result.DKIMProviders.Detected.Count -gt 0) {
                 </div>
             </div>
         </div>
+        
+$(if($menuChoice -eq '4' -and $result.EmailHeaderDMARCPass -ne "") {
+@"
+        <!-- Email Header Analysis Section - Redesigned for User Friendliness -->
+        <div class="email-header-section">
+            <div class="email-header-main-title">
+                <span class="main-title-icon">&#128231;</span>
+                <div class="main-title-content">
+                    <h2>Email Authentication Analysis</h2>
+                    <p class="main-title-subtitle">Understanding how this email performed against authentication protocols</p>
+                </div>
+            </div>
+            
+            <!-- Overall Result Banner -->
+            <div class="overall-result-banner $(if($result.EmailHeaderDMARCPass -eq 'Yes'){'result-banner-pass'}else{'result-banner-fail'})">
+                <div class="result-banner-content">
+                    <div class="result-banner-icon">
+                        $(if($result.EmailHeaderDMARCPass -eq 'Yes'){'&#10003;'}else{'&#10007;'})
+                    </div>
+                    <div class="result-banner-text">
+                        <div class="result-banner-main">
+                            $(if($result.EmailHeaderDMARCPass -eq 'Yes'){
+                                if($result.EmailHeaderCondition1Met -and $result.EmailHeaderCondition2Met) {
+                                    'EXCELLENT: Email PASSED DMARC Authentication'
+                                } else {
+                                    'GOOD: Email PASSED DMARC Authentication'
+                                }
+                            } else {
+                                'FAILED: Email FAILED DMARC Authentication'
+                            })
+                        </div>
+                        <div class="result-banner-detail">
+                            $(if($result.EmailHeaderDMARCPass -eq 'Yes'){
+                                if($result.EmailHeaderCondition1Met -and $result.EmailHeaderCondition2Met) {
+                                    'Both SPF and DKIM authentication methods succeeded with proper domain alignment'
+                                } else {
+                                    'At least one authentication method (SPF or DKIM) succeeded with proper domain alignment'
+                                }
+                            } else {
+                                'Neither SPF nor DKIM authentication succeeded with proper domain alignment'
+                            })
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Step-by-Step Authentication Flow - Redesigned for Clarity -->
+            <div class="auth-flow-container-clear">
+                <div class="flow-title-modern">
+                    <span class="flow-icon">&#128200;</span>
+                    <h3>Authentication Process Breakdown</h3>
+                    <p class="flow-subtitle">Step-by-step analysis of email authentication</p>
+                </div>
+                
+                <!-- Step 1: Protocol Results -->
+                <div class="auth-step-clear step-1">
+                    <div class="step-header-modern">
+                        <div class="step-indicator">
+                            <span class="step-number-modern">1</span>
+                            <div class="step-connector"></div>
+                        </div>
+                        <div class="step-content-header">
+                            <h4 class="step-title-modern">Protocol Authentication Results</h4>
+                            <p class="step-description">Check if each authentication protocol passed or failed</p>
+                        </div>
+                    </div>
+                    <div class="step-body">
+                        <div class="protocol-results-grid-modern">
+                            <div class="protocol-card-modern spf-card">
+                                <div class="protocol-header-modern">
+                                    <div class="protocol-icon-modern spf-icon-modern">&#128287;</div>
+                                    <div class="protocol-info">
+                                        <div class="protocol-name-modern">SPF</div>
+                                        <div class="protocol-description-modern">Sender Policy Framework</div>
+                                    </div>
+                                </div>
+                                <div class="protocol-result-modern $(if($result.EmailHeaderSPFResult -eq 'pass'){'protocol-pass-modern'}elseif($result.EmailHeaderSPFResult -eq 'fail'){'protocol-fail-modern'}else{'protocol-unknown-modern'})">
+                                    <span class="protocol-status-icon-modern">$(if($result.EmailHeaderSPFResult -eq 'pass'){'&#10003;'}elseif($result.EmailHeaderSPFResult -eq 'fail'){'&#10007;'}else{'&#63;'})</span>
+                                    <span class="protocol-status-text-modern">$(if($result.EmailHeaderSPFResult){$result.EmailHeaderSPFResult.ToUpper()}else{'UNKNOWN'})</span>
+                                </div>
+                                <div class="protocol-explanation-modern">
+                                    $(if($result.EmailHeaderSPFResult -eq 'pass'){'&#x2705; Server authorized to send emails'}
+                                    elseif($result.EmailHeaderSPFResult -eq 'fail'){'&#x274C; Server NOT authorized to send emails'}
+                                    else{'&#x2753; Authentication result unclear'})
+                                </div>
+                            </div>
+                            
+                            <div class="protocol-card-modern dkim-card">
+                                <div class="protocol-header-modern">
+                                    <div class="protocol-icon-modern dkim-icon-modern">&#128273;</div>
+                                    <div class="protocol-info">
+                                        <div class="protocol-name-modern">DKIM</div>
+                                        <div class="protocol-description-modern">Digital Signature</div>
+                                    </div>
+                                </div>
+                                <div class="protocol-result-modern $(if($result.EmailHeaderDKIMResult -eq 'pass'){'protocol-pass-modern'}elseif($result.EmailHeaderDKIMResult -eq 'fail'){'protocol-fail-modern'}else{'protocol-unknown-modern'})">
+                                    <span class="protocol-status-icon-modern">$(if($result.EmailHeaderDKIMResult -eq 'pass'){'&#10003;'}elseif($result.EmailHeaderDKIMResult -eq 'fail'){'&#10007;'}else{'&#63;'})</span>
+                                    <span class="protocol-status-text-modern">$(if($result.EmailHeaderDKIMResult){$result.EmailHeaderDKIMResult.ToUpper()}else{'UNKNOWN'})</span>
+                                </div>
+                                <div class="protocol-explanation-modern">
+                                    $(if($result.EmailHeaderDKIMResult -eq 'pass'){'&#x2705; Email signature is valid'}
+                                    elseif($result.EmailHeaderDKIMResult -eq 'fail'){'&#x274C; Email signature is invalid'}
+                                    else{'&#x2753; Signature status unclear'})
+                                </div>
+                            </div>
+                            
+                            <div class="protocol-card-modern dmarc-card">
+                                <div class="protocol-header-modern">
+                                    <div class="protocol-icon-modern dmarc-icon-modern">&#128737;</div>
+                                    <div class="protocol-info">
+                                        <div class="protocol-name-modern">DMARC</div>
+                                        <div class="protocol-description-modern">Policy Evaluation</div>
+                                    </div>
+                                </div>
+                                <div class="protocol-result-modern $(if($result.EmailHeaderDMARCResult -eq 'pass'){'protocol-pass-modern'}elseif($result.EmailHeaderDMARCResult -eq 'fail'){'protocol-fail-modern'}else{'protocol-unknown-modern'})">
+                                    <span class="protocol-status-icon-modern">$(if($result.EmailHeaderDMARCResult -eq 'pass'){'&#10003;'}elseif($result.EmailHeaderDMARCResult -eq 'fail'){'&#10007;'}else{'&#63;'})</span>
+                                    <span class="protocol-status-text-modern">$(if($result.EmailHeaderDMARCResult){$result.EmailHeaderDMARCResult.ToUpper()}else{'UNKNOWN'})</span>
+                                </div>
+                                <div class="protocol-explanation-modern">
+                                    $(if($result.EmailHeaderDMARCResult -eq 'pass'){'&#x2705; Policy evaluation passed'}
+                                    elseif($result.EmailHeaderDMARCResult -eq 'fail'){'&#x274C; Policy evaluation failed'}
+                                    else{'&#x2753; Policy evaluation unclear'})
+                                </div>
+                            </div>
+$(if($result.EmailHeaderReason) {
+"                            
+                            <div class='protocol-card-modern reason-card'>
+                                <div class='protocol-header-modern'>
+                                    <div class='protocol-icon-modern reason-icon-modern'>&#128681;</div>
+                                    <div class='protocol-info'>
+                                        <div class='protocol-name-modern'>Reason</div>
+                                        <div class='protocol-description-modern'>Authentication Reason Code</div>
+                                    </div>
+                                </div>
+                                <div class='protocol-result-modern protocol-info-modern'>
+                                    <span class='protocol-status-icon-modern'>&#128681;</span>
+                                    <span class='protocol-status-text-modern'>$($result.EmailHeaderReason)</span>
+                                </div>
+                                <div class='protocol-explanation-modern'>
+                                    &#x1F4CB; $(
+                                        $reasonExplanation = Get-ReasonCodeExplanation -ReasonCode $result.EmailHeaderReason
+                                        if ($reasonExplanation) {
+                                            $reasonExplanation
+                                        } else {
+                                            "Detailed reason code for authentication result"
+                                        }
+                                    )
+                                </div>
+                            </div>"
+})
+$(if($result.EmailHeaderCompAuth) {
+"                            
+                            <div class='protocol-card-modern compauth-card'>
+                                <div class='protocol-header-modern'>
+                                    <div class='protocol-icon-modern compauth-icon-modern'>&#128273;</div>
+                                    <div class='protocol-info'>
+                                        <div class='protocol-name-modern'>CompAuth</div>
+                                        <div class='protocol-description-modern'>Composite Authentication</div>
+                                    </div>
+                                </div>
+                                <div class='protocol-result-modern protocol-info-modern'>
+                                    <span class='protocol-status-icon-modern'>&#128273;</span>
+                                    <span class='protocol-status-text-modern'>$($result.EmailHeaderCompAuth)</span>
+                                </div>
+                                <div class='protocol-explanation-modern'>
+                                    &#x1F4CA; Microsoft's composite authentication result
+                                </div>
+                            </div>"
+})
+                        </div>
+                        
+                        <!-- Additional Authentication Information -->
+$(if($result.EmailHeaderAuthenticationResultsRaw) {
+@"
+                        <div class="additional-auth-info" style="margin-top: 25px; padding: 20px; background: rgba(255,255,255,0.95); border-radius: 10px; border: 1px solid #e9ecef;">
+                            <h5 style="margin: 0 0 15px 0; color: #2c3e50; font-size: 1.1em; font-weight: 600; display: flex; align-items: center; gap: 10px;">
+                                <span style="font-size: 1.2em;">&#128269;</span>
+                                Additional Details
+                            </h5>
+                            
+                            <!-- Complete Authentication-Results Header -->
+                            <div style='margin-bottom: 20px; padding: 15px; background: rgba(108,117,125,0.1); border-left: 4px solid #6c757d; border-radius: 0 8px 8px 0;'>
+                                <div style='font-weight: 600; color: #495057; font-size: 1em; margin-bottom: 10px; display: flex; align-items: center; gap: 8px;'>
+                                    <span style='font-size: 1.1em;'>&#128231;</span>
+                                    Complete Authentication-Results Header
+                                </div>
+                                <div style='font-family: monospace; font-size: 0.85em; color: #495057; line-height: 1.4; background: rgba(248,249,250,0.8); padding: 12px; border-radius: 4px; word-break: break-all; border: 1px solid rgba(0,0,0,0.1);'>$(($result.EmailHeaderAuthenticationResultsRaw -replace '&', '&amp;' -replace '<', '&lt;' -replace '>', '&gt;' -replace '[^\x20-\x7E]', '' -replace '\s+', ' ').Trim())</div>
+                            </div>
+                            
+                            <!-- X-Microsoft-Antispam-Mailbox-Delivery Header -->
+$(if($result.EmailHeaderAntispamMailboxDelivery) {
+"                            <div style='margin-bottom: 20px; padding: 15px; background: rgba(40, 167, 69, 0.1); border-left: 4px solid #28a745; border-radius: 0 8px 8px 0;'>
+                                <div style='font-weight: 600; color: #155724; font-size: 1em; margin-bottom: 10px; display: flex; align-items: center; gap: 8px;'>
+                                    <span style='font-size: 1.1em;'>&#128737;</span>
+                                    X-Microsoft-Antispam-Mailbox-Delivery
+                                </div>
+                                <div style='font-family: monospace; font-size: 0.85em; color: #155724; line-height: 1.4; background: rgba(248,249,250,0.8); padding: 12px; border-radius: 4px; word-break: break-all; border: 1px solid rgba(0,0,0,0.1);'>$(($result.EmailHeaderAntispamMailboxDelivery -replace '&', '&amp;' -replace '<', '&lt;' -replace '>', '&gt;' -replace '[^\x20-\x7E]', '' -replace '\s+', ' ').Trim())</div>
+                                
+                                <!-- Individual Parameter Analysis -->
+                                <div style='margin-top: 15px;'>
+                                    <div style='font-weight: 600; color: #155724; font-size: 0.95em; margin-bottom: 12px;'>Parameter Analysis:</div>
+                                    <div class='protocol-results-grid-modern'>
+$(if($result.EmailHeaderAntispamUCF) {
+"                                        <!-- UCF Parameter -->
+                                        <div class='protocol-card-modern ucf-card'>
+                                            <div class='protocol-header-modern'>
+                                                <div class='protocol-icon-modern ucf-icon-modern'>&#128269;</div>
+                                                <div class='protocol-info'>
+                                                    <div class='protocol-name-modern'>UCF</div>
+                                                    <div class='protocol-description-modern'>Unified Content Filter</div>
+                                                </div>
+                                            </div>
+                                            <div class='protocol-result-modern $(if($result.EmailHeaderAntispamUCF -eq '0'){'protocol-pass-modern'}else{'protocol-fail-modern'})'>
+                                                <span class='protocol-status-icon-modern'>$(if($result.EmailHeaderAntispamUCF -eq '0'){'&#10003;'}else{'&#10007;'})</span>
+                                                <span class='protocol-status-text-modern'>$($result.EmailHeaderAntispamUCF)</span>
+                                            </div>
+                                            <div class='protocol-explanation-modern'>
+                                                $(if($result.EmailHeaderAntispamUCF -eq '0'){'&#x2705; Content filter not applied - message passed initial checks'}else{'&#x274C; Content filter applied - security measures triggered'})
+                                            </div>
+                                        </div>"
+})
+
+$(if($result.EmailHeaderAntispamJMR) {
+"                                        <!-- JMR Parameter -->
+                                        <div class='protocol-card-modern jmr-card'>
+                                            <div class='protocol-header-modern'>
+                                                <div class='protocol-icon-modern jmr-icon-modern'>&#128235;</div>
+                                                <div class='protocol-info'>
+                                                    <div class='protocol-name-modern'>JMR</div>
+                                                    <div class='protocol-description-modern'>Junk Mail Rule</div>
+                                                </div>
+                                            </div>
+                                            <div class='protocol-result-modern $(if($result.EmailHeaderAntispamJMR -eq '0'){'protocol-pass-modern'}else{'protocol-fail-modern'})'>
+                                                <span class='protocol-status-icon-modern'>$(if($result.EmailHeaderAntispamJMR -eq '0'){'&#10003;'}else{'&#10007;'})</span>
+                                                <span class='protocol-status-text-modern'>$($result.EmailHeaderAntispamJMR)</span>
+                                            </div>
+                                            <div class='protocol-explanation-modern'>
+                                                $(if($result.EmailHeaderAntispamJMR -eq '0'){'&#x2705; Junk mail rule not triggered - passed spam detection'}else{'&#x274C; Junk mail rule triggered - potential spam detected'})
+                                            </div>
+                                        </div>"
+})
+
+$(if($result.EmailHeaderAntispamDest) {
+"                                        <!-- Dest Parameter -->
+                                        <div class='protocol-card-modern dest-card'>
+                                            <div class='protocol-header-modern'>
+                                                <div class='protocol-icon-modern dest-icon-modern'>&#127919;</div>
+                                                <div class='protocol-info'>
+                                                    <div class='protocol-name-modern'>DEST</div>
+                                                    <div class='protocol-description-modern'>Message Destination</div>
+                                                </div>
+                                            </div>
+                                            <div class='protocol-result-modern $(if($result.EmailHeaderAntispamDest -eq 'I'){'protocol-pass-modern'}elseif($result.EmailHeaderAntispamDest -eq 'J' -or $result.EmailHeaderAntispamDest -eq 'D'){'protocol-fail-modern'}else{'protocol-unknown-modern'})'>
+                                                <span class='protocol-status-icon-modern'>$(if($result.EmailHeaderAntispamDest -eq 'I'){'&#10003;'}elseif($result.EmailHeaderAntispamDest -eq 'J' -or $result.EmailHeaderAntispamDest -eq 'D'){'&#10007;'}else{'&#63;'})</span>
+                                                <span class='protocol-status-text-modern'>$($result.EmailHeaderAntispamDest)</span>
+                                            </div>
+                                            <div class='protocol-explanation-modern'>
+                                                $(if($result.EmailHeaderAntispamDest -eq 'I'){'&#x2705; Delivered to Inbox - successful delivery'}
+                                                elseif($result.EmailHeaderAntispamDest -eq 'J'){'&#x274C; Delivered to Junk folder - spam detected'}
+                                                elseif($result.EmailHeaderAntispamDest -eq 'D'){'&#x274C; Message deleted - high-confidence spam'}
+                                                elseif($result.EmailHeaderAntispamDest -eq 'C'){'&#x2753; The message was delivered to the destination'}
+                                                else{'&#x2753; Unknown destination routing'})
+                                            </div>
+                                        </div>"
+})
+
+$(if($result.EmailHeaderAntispamOFR) {
+"                                        <!-- OFR Parameter -->
+                                        <div class='protocol-card-modern ofr-card'>
+                                            <div class='protocol-header-modern'>
+                                                <div class='protocol-icon-modern ofr-icon-modern'>&#128200;</div>
+                                                <div class='protocol-info'>
+                                                    <div class='protocol-name-modern'>OFR</div>
+                                                    <div class='protocol-description-modern'>Organizational Filter</div>
+                                                </div>
+                                            </div>
+                                            <div class='protocol-result-modern $(if($result.EmailHeaderAntispamOFR -eq 'None'){'protocol-pass-modern'}elseif($result.EmailHeaderAntispamOFR -like '*CustomRules*'){'protocol-unknown-modern'}else{'protocol-fail-modern'})'>
+                                                <span class='protocol-status-icon-modern'>$(if($result.EmailHeaderAntispamOFR -eq 'None'){'&#10003;'}elseif($result.EmailHeaderAntispamOFR -like '*CustomRules*'){'&#63;'}else{'&#10007;'})</span>
+                                                <span class='protocol-status-text-modern'>$($result.EmailHeaderAntispamOFR)</span>
+                                            </div>
+                                            <div class='protocol-explanation-modern'>
+                                                $(if($result.EmailHeaderAntispamOFR -eq 'None'){'&#x2705; No organizational rules applied - standard processing'}
+                                                elseif($result.EmailHeaderAntispamOFR -like '*CustomRules*'){'&#x2753; Custom organizational rules applied (e.g., transport or mail flow rules)'}
+                                                else{'&#x274C; Organizational filtering applied'})
+                                            </div>
+                                        </div>"
+})
+                                    </div>
+                                </div>
+                            </div>"
+})
+                        </div>
+"@
+})
+                    </div>
+                </div>
+
+                <!-- Step 2: Domain Information -->
+                <div class="auth-step-clear step-2">
+                    <div class="step-header-modern">
+                        <div class="step-indicator">
+                            <span class="step-number-modern">2</span>
+                            <div class="step-connector"></div>
+                        </div>
+                        <div class="step-content-header">
+                            <h4 class="step-title-modern">Domain Alignment Analysis</h4>
+                            <p class="step-description">Verify that email domains are properly aligned</p>
+                        </div>
+                    </div>
+                    <div class="step-body">
+                        <div class="domain-alignment-explanation-modern">
+                            <div class="info-box">
+                                <span class="info-icon">&#x1F4A1;</span>
+                                <span>Domains can be aligned if MailFrom (P1) matches From (P2)</span>
+                            </div>
+                        </div>
+                        <div class="domain-comparison-ultra-modern">
+                            <div class="domain-pair-modern single-pair">
+                                <div class="domain-info-card-modern envelope-card">
+                                    <div class="domain-card-header-modern">
+                                        <span class="domain-icon-modern">&#128232;</span>
+                                        <div class="domain-type-info">
+                                            <span class="domain-type-modern">MailFrom (P1) - smtp.mailfrom</span>
+                                            <span class="domain-type-desc">Technical sender address</span>
+                                        </div>
+                                    </div>
+                                    <div class="domain-value-display-modern">$(if($result.EmailHeaderSMTPMailFrom){$result.EmailHeaderSMTPMailFrom}else{'Not Found'})</div>
+                                </div>
+                                
+                                <div class="alignment-arrow-modern">
+                                    <div class="arrow-line"></div>
+                                    <span class="arrow-icon-modern">&#8596;</span>
+                                    <span class="alignment-text-modern">Must Match</span>
+                                    <div class="arrow-line"></div>
+                                </div>
+                                
+                                <div class="domain-info-card-modern header-card">
+                                    <div class="domain-card-header-modern">
+                                        <span class="domain-icon-modern">&#128228;</span>
+                                        <div class="domain-type-info">
+                                            <span class="domain-type-modern">From (P2) - header.from</span>
+                                            <span class="domain-type-desc">What users see</span>
+                                        </div>
+                                    </div>
+                                    <div class="domain-value-display-modern">$(if($result.EmailHeaderHeaderFrom){$result.EmailHeaderHeaderFrom}else{'Not Found'})</div>
+                                </div>
+                                
+                                <div class="alignment-status-modern">
+                                    <div class="alignment-result-modern $(if($result.EmailHeaderDMARCPass -eq 'Yes'){'alignment-pass-modern'}else{'alignment-fail-modern'})">
+                                        <span class="alignment-icon-modern">$(if($result.EmailHeaderDMARCPass -eq 'Yes'){'&#10003;'}else{'&#10007;'})</span>
+                                        <div class="alignment-text-container">
+                                            <span class="alignment-label-modern">$(if($result.EmailHeaderDMARCPass -eq 'Yes'){'Properly Aligned'}else{'Not Aligned'})</span>
+                                            <span class="alignment-detail">$(if($result.EmailHeaderDMARCPass -eq 'Yes'){'Domains match requirements'}else{'Domain mismatch detected'})</span>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Step 3: DMARC Pass Conditions -->
+                <div class="auth-step-clear step-3">
+                    <div class="step-header-modern">
+                        <div class="step-indicator">
+                            <span class="step-number-modern">3</span>
+                            <div class="step-connector"></div>
+                        </div>
+                        <div class="step-content-header">
+                            <h4 class="step-title-modern">DMARC Pass Evaluation</h4>
+                            <p class="step-description">Check DMARC Passing conditions</p>
+                        </div>
+                    </div>
+                    <div class="step-body">
+                        <div class="dmarc-conditions-explanation-modern">
+                            <div class="info-box">
+                                <span class="info-icon">&#x26A1;</span>
+                                <span>DMARC passes when <strong>at least ONE</strong> of these conditions is met:</span>
+                            </div>
+                        </div>
+                        
+                        <div class="conditions-container-modern">
+                            <!-- Condition 1 -->
+                            <div class="condition-ultra-modern $(if($result.EmailHeaderCondition1Met){'condition-success-modern'}else{'condition-failure-modern'})">
+                                <div class="condition-main-header-modern">
+                                    <div class="condition-number-modern">A</div>
+                                    <div class="condition-title-section-modern">
+                                        <div class="condition-title-main">SPF Authentication Path</div>
+                                        <div class="condition-subtitle-modern">SPF passes and From (P2) matches MailFrom (P1)</div>
+                                    </div>
+                                    <div class="condition-main-status-modern">
+                                        <span class="main-status-badge-modern $(if($result.EmailHeaderCondition1Met){'status-met-modern'}else{'status-not-met-modern'})">
+                                            $(if($result.EmailHeaderCondition1Met){'&#10003; MET'}else{'&#10007; NOT MET'})
+                                        </span>
+                                    </div>
+                                </div>
+                                <div class="condition-requirements-modern">
+                                    <div class="requirement-item-modern $(if($result.EmailHeaderSPFResult -eq 'pass'){'requirement-met-modern'}else{'requirement-not-met-modern'})">
+                                        <span class="requirement-icon-modern">$(if($result.EmailHeaderSPFResult -eq 'pass'){'&#10003;'}else{'&#10007;'})</span>
+                                        <span class="requirement-text-modern">SPF Result: <strong>$(if($result.EmailHeaderSPFResult){$result.EmailHeaderSPFResult.ToUpper()}else{'UNKNOWN'})</strong></span>
+                                    </div>
+                                    <div class="requirement-item-modern $(if($result.EmailHeaderHeaderFrom -and $result.EmailHeaderSMTPMailFrom -and $result.EmailHeaderHeaderFrom.ToLower() -eq $result.EmailHeaderSMTPMailFrom.ToLower()){'requirement-met-modern'}else{'requirement-not-met-modern'})">
+                                        <span class="requirement-icon-modern">$(if($result.EmailHeaderHeaderFrom -and $result.EmailHeaderSMTPMailFrom -and $result.EmailHeaderHeaderFrom.ToLower() -eq $result.EmailHeaderSMTPMailFrom.ToLower()){'&#10003;'}else{'&#10007;'})</span>
+                                        <span class="requirement-text-modern">Domain Alignment: From (P2) = MailFrom (P1)</span>
+                                    </div>
+                                </div>
+                            </div>
+                            
+                            <!-- OR Separator -->
+                            <div class="or-separator-modern">
+                                <div class="or-line"></div>
+                                <span class="or-text-modern">OR</span>
+                                <div class="or-line"></div>
+                            </div>
+                            
+                            <!-- Condition 2 -->
+                            <div class="condition-ultra-modern $(if($result.EmailHeaderCondition2Met){'condition-success-modern'}else{'condition-failure-modern'})">
+                                <div class="condition-main-header-modern">
+                                    <div class="condition-number-modern">B</div>
+                                    <div class="condition-title-section-modern">
+                                        <div class="condition-title-main">DKIM Authentication Path</div>
+                                        <div class="condition-subtitle-modern">DKIM passes and the DKIM signature (header.d) is signed by the From (P2) domain</div>
+                                    </div>
+                                    <div class="condition-main-status-modern">
+                                        <span class="main-status-badge-modern $(if($result.EmailHeaderCondition2Met){'status-met-modern'}else{'status-not-met-modern'})">
+                                            $(if($result.EmailHeaderCondition2Met){'&#10003; MET'}else{'&#10007; NOT MET'})
+                                        </span>
+                                    </div>
+                                </div>
+                                <div class="condition-requirements-modern">
+                                    <div class="requirement-item-modern $(if($result.EmailHeaderDKIMResult -eq 'pass'){'requirement-met-modern'}else{'requirement-not-met-modern'})">
+                                        <span class="requirement-icon-modern">$(if($result.EmailHeaderDKIMResult -eq 'pass'){'&#10003;'}else{'&#10007;'})</span>
+                                        <span class="requirement-text-modern">DKIM Result: <strong>$(if($result.EmailHeaderDKIMResult){$result.EmailHeaderDKIMResult.ToUpper()}else{'UNKNOWN'})</strong></span>
+                                    </div>
+                                    <div class="requirement-item-modern $(if($result.EmailHeaderHeaderD -and $result.EmailHeaderSMTPMailFrom -and $result.EmailHeaderHeaderD.ToLower() -eq $result.EmailHeaderSMTPMailFrom.ToLower()){'requirement-met-modern'}else{'requirement-not-met-modern'})">
+                                        <span class="requirement-icon-modern">$(if($result.EmailHeaderHeaderD -and $result.EmailHeaderSMTPMailFrom -and $result.EmailHeaderHeaderD.ToLower() -eq $result.EmailHeaderSMTPMailFrom.ToLower()){'&#10003;'}else{'&#10007;'})</span>
+                                        <span class="requirement-text-modern">Domain Alignment: DKIM signature (header.d) is signed by the From (P2) domain</span>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Final Summary -->
+                <div class="auth-step-clear step-4">
+                    <div class="step-header-modern">
+                        <div class="step-indicator final">
+                            <span class="step-number-modern">4</span>
+                        </div>
+                        <div class="step-content-header">
+                            <h4 class="step-title-modern">Final Authentication Result</h4>
+                            <p class="step-description">Overall authentication outcome</p>
+                        </div>
+                    </div>
+                    <div class="step-body">
+                        <div class="final-result-ultra-modern">
+                            <div class="final-result-content-modern $(if($result.EmailHeaderDMARCPass -eq 'Yes'){'final-success-modern'}else{'final-failure-modern'})">
+                                <div class="final-result-icon-modern">
+                                    $(if($result.EmailHeaderDMARCPass -eq 'Yes'){'&#127881;'}else{'&#9888;'})
+                                </div>
+                                <div class="final-result-text-modern">
+                                    <div class="final-result-title-modern">
+                                        $(if($result.EmailHeaderDMARCPass -eq 'Yes') {
+                                            if($result.EmailHeaderCondition1Met -and $result.EmailHeaderCondition2Met) {
+                                                'EXCELLENT: DMARC AUTHENTICATION PASSED'
+                                            } else {
+                                                'GOOD: DMARC AUTHENTICATION PASSED'
+                                            }
+                                        } else {
+                                            'DMARC AUTHENTICATION FAILED'
+                                        })
+                                    </div>
+                                    <div class="final-result-explanation-modern">
+                                        $(if($result.EmailHeaderDMARCPass -eq 'Yes') {
+                                            if($result.EmailHeaderCondition1Met -and $result.EmailHeaderCondition2Met) {
+                                                '&#x1F3AF; Both SPF and DKIM authentication paths succeeded. This email has the highest level of authentication confidence and should be trusted by email systems.'
+                                            } else {
+                                                '&#x2705; At least one authentication path (SPF or DKIM) succeeded with proper domain alignment. This email passed DMARC requirements and should be delivered normally.'
+                                            }
+                                        } else {
+                                            '&#x26A0;&#xFE0F; Neither authentication path succeeded with proper domain alignment. This email may be treated as suspicious, quarantined, or rejected by email systems depending on the domain''s DMARC policy.'
+                                        })
+                                    </div>
+                                </div>
+                                <div class="final-result-actions">
+                                    <div class="action-recommendation">
+                                        $(if($result.EmailHeaderDMARCPass -eq 'Yes') {
+                                            '&#x2709;&#xFE0F; Email should be delivered to inbox'
+                                        } else {
+                                            '&#x1F6AB; Email may be blocked or sent to spam'
+                                        })
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+"@
+})
             
         </div>
 "@
@@ -3531,27 +6129,49 @@ $(if($result.DKIMProviders -and $result.DKIMProviders.Detected.Count -gt 0) {
     $html += ""
     $html += '    <div class="footer">'
     $html += "        <h3>&#128202; Understanding Your Results</h3>"
+    $html += '        <div style="background: linear-gradient(135deg, #f8f9fa 0%, #e9ecef 100%); border: 1px solid #dee2e6; border-radius: 10px; padding: 20px; margin: 20px 0;">'
+    $html += '            <h4 style="margin-top: 0; color: #495057; display: flex; align-items: center; gap: 10px;"><span style="font-size: 1.2em;">&#9881;</span>Granular Scoring System</h4>'
+    $html += '            <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 15px; margin-top: 15px;">'
+    $html += '                <div style="background: rgba(255,193,7,0.1); border-left: 4px solid #ffc107; padding: 15px; border-radius: 0 8px 8px 0;">'
+    $html += '                    <strong style="color: #856404; font-size: 1.1em;">SPF (40 points total)</strong><br>'
+    $html += '                    <span style="color: #856404; font-size: 0.9em;">&#8226; Record Present: <strong>8 points</strong><br>&#8226; Other 8 checks: <strong>4 points each</strong></span>'
+    $html += '                </div>'
+    $html += '                <div style="background: rgba(23,162,184,0.1); border-left: 4px solid #17a2b8; padding: 15px; border-radius: 0 8px 8px 0;">'
+    $html += '                    <strong style="color: #0c5460; font-size: 1.1em;">DMARC (30 points total)</strong><br>'
+    $html += '                    <span style="color: #0c5460; font-size: 0.9em;">&#8226; Each of 5 checks: <strong>6 points each</strong><br>&#8226; Includes policy strength validation</span>'
+    $html += '                </div>'
+    $html += '                <div style="background: rgba(111,66,193,0.1); border-left: 4px solid #6f42c1; padding: 15px; border-radius: 0 8px 8px 0;">'
+    $html += '                    <strong style="color: #495057; font-size: 1.1em;">DKIM (30 points total)</strong><br>'
+    $html += '                    <span style="color: #495057; font-size: 0.9em;">&#8226; Each of 5 checks: <strong>6 points each</strong><br>&#8226; Key strength and TTL validation</span>'
+    $html += '                </div>'
+    $html += '            </div>'
+    $html += '            <p style="margin: 15px 0 0 0; color: #6c757d; font-size: 0.9em; text-align: center;">Maximum possible score: <strong>100 points</strong> (40 + 30 + 30)</p>'
+    $html += '        </div>'
     $html += '        <div class="legend">'
     $html += '            <div class="legend-item">'
-    $html += '                <span class="status-excellent">Excellent (90+)</span><br>'
-    $html += "                <small>All records properly configured</small>"
+    $html += '                <span class="status-excellent">Excellent (95+ with DMARC reject)</span><br>'
+    $html += "                <small>All records optimally configured with strict DMARC policy</small>"
     $html += "            </div>"
     $html += '            <div class="legend-item">'
-    $html += '                <span class="status-good">Good (70-89)</span><br>'
-    $html += "                <small>Minor improvements needed</small>"
+    $html += '                <span class="status-good">Good (85-94)</span><br>'
+    $html += "                <small>Well configured but may need DMARC policy upgrade</small>"
     $html += "            </div>"
     $html += '            <div class="legend-item">'
-    $html += '                <span class="status-fair">Fair (50-69)</span><br>'
-    $html += "                <small>Some security gaps present</small>"
+    $html += '                <span class="status-fair">Fair (65-84)</span><br>'
+    $html += "                <small>Some security gaps present, improvements needed</small>"
     $html += "            </div>"
     $html += '            <div class="legend-item">'
-    $html += '                <span class="status-poor">Poor (&lt;50)</span><br>'
+    $html += '                <span class="status-poor">Poor (40-64)</span><br>'
     $html += "                <small>Significant security vulnerabilities</small>"
+    $html += "            </div>"
+    $html += '            <div class="legend-item">'
+    $html += '                <span class="status-critical">Critical (&lt;40)</span><br>'
+    $html += "                <small>Urgent attention required - major security risks</small>"
     $html += "            </div>"
     $html += "        </div>"
     $html += '        <hr style="margin: 25px 0; border: none; border-top: 1px solid #ddd;">'
     $html += '        <p style="color: #888; font-size: 0.9em;">'
-    $html += "            &#128231; Email Authentication Checker v1.0 | Generated on $reportDate at $(Get-Date -Format 'HH:mm:ss')"
+    $html += "            &#128231; Email Authentication Checker v1.4 (Granular Scoring) | Generated on $reportDate at $(Get-Date -Format 'HH:mm:ss')"
     $html += "        </p>"
     $html += "    </div>"
     $html += "    </div>"
