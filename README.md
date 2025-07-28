@@ -166,7 +166,7 @@ Subject: Test Email
 - ✅ Cryptographic strength assessment
 - ✅ Service provider detection
 
-#### Enhanced Microsoft Antispam Analysis (NEW in v1.4)
+#### Enhanced Microsoft Antispam Analysis (NEW in v1.3)
 - ✅ **X-Microsoft-Antispam-Mailbox-Delivery** header parsing
 - ✅ **UCF (Unified Content Filter)** parameter extraction and analysis
 - ✅ **JMR (Junk Mail Rule)** parameter identification with scoring

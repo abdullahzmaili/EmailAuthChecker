@@ -14,7 +14,7 @@
 
 ---
 
-## 🆕 What's New in Version 1.3tication Checker v1.4 - Detailed Instructions
+## 🆕 What's New in Version 1.3tication Checker v1.3 - Detailed Instructions
 
 ## Table of Contents
 
@@ -22,7 +22,7 @@
 2. [Running the Script](#running-the-script)
 3. [Analysis Modes](#analysis-modes)
 4. [Understanding Results](#understanding-results)
-5. [Enhanced Features (v1.4)](#enhanced-features-v14)
+5. [Enhanced Features (v1.3)](#enhanced-features-v14)
 6. [Advanced Usage](#advanced-usage)
 7. [Troubleshooting](#troubleshooting)
 8. [Best Practices](#best-practices)
@@ -30,7 +30,7 @@
 
 ---
 
-## 🆕 What's New in Version 1.4
+## 🆕 What's New in Version 1.3
 
 ### Enhanced Microsoft Antispam Analysis
 - **X-Microsoft-Antispam-Mailbox-Delivery Header Parsing**: Individual parameter extraction for UCF, JMR, Dest, and OFR
