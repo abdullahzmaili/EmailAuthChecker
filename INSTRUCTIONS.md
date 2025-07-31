@@ -1,4 +1,8 @@
-# 📖 Email Authentication Checker v1.3 - Detailed Instructions
+# 📖 Email Authentication Checker v1.4 - Detailed Instructions
+
+## ✨ Enhanced DMARC Policy Strictness Edition
+
+Comprehensive guide for advanced email authentication analysis with enhanced security enforcement.
 
 ## Table of Contents
 
@@ -6,7 +10,7 @@
 2. [Running the Script](#running-the-script)
 3. [Analysis Modes](#analysis-modes)
 4. [Understanding Results](#understanding-results)
-5. [Enhanced Features (v1.3)](#enhanced-features-v13)
+5. [Enhanced Features (v1.4)](#enhanced-features-v13)
 6. [Advanced Usage](#advanced-usage)
 7. [Troubleshooting](#troubleshooting)
 8. [Best Practices](#best-practices)
@@ -14,35 +18,24 @@
 
 ---
 
-## 🆕 What's New in Version 1.3tication Checker v1.3 - Detailed Instructions
+## 🆕 What's New in Version 1.4
 
-## Table of Contents
+### 🔒 Enhanced Security Features
+- **Strict DMARC Policy Enforcement**: Only 'reject' policy achieves maximum security rating (95-100 score range)
+- **Enhanced Security Scoring**: 'quarantine' and 'none' policies treated as security weaknesses
+- **Critical Status Category**: New status for scores below 40 requiring immediate action
+- **Enhanced Security Recommendations**: More focused on protection effectiveness and real-world threats
 
-1. [Installation & Setup](#installation--setup)
-2. [Running the Script](#running-the-script)
-3. [Analysis Modes](#analysis-modes)
-4. [Understanding Results](#understanding-results)
-5. [Enhanced Features (v1.3)](#enhanced-features-v14)
-6. [Advanced Usage](#advanced-usage)
-7. [Troubleshooting](#troubleshooting)
-8. [Best Practices](#best-practices)
-9. [Security Checks Reference](#security-checks-reference)
+### 🔧 Code Quality Improvements
+- **Improved Code Organization**: All functions organized with #region/#endregion comments for better maintainability
+- **Enhanced Error Handling**: More robust error handling and fallback mechanisms
+- **Comprehensive Documentation**: Updated guides and troubleshooting resources
 
----
-
-## 🆕 What's New in Version 1.3
-
-### Enhanced Microsoft Antispam Analysis
-- **X-Microsoft-Antispam-Mailbox-Delivery Header Parsing**: Individual parameter extraction for UCF, JMR, Dest, and OFR
+### 🚀 Previous Enhancements (Maintained in v1.4)
+- **Enhanced Microsoft Antispam Analysis**: X-Microsoft-Antispam-Mailbox-Delivery header parsing with UCF, JMR, Dest, and OFR parameters
 - **Protocol Card Visualization**: Interactive cards displaying Microsoft antispam parameters with distinctive icons
 - **Enhanced Authentication-Results Processing**: Precise header targeting that excludes ARC-Authentication-Results headers
 - **Advanced Unicode Handling**: Comprehensive character filtering to prevent encoding artifacts in HTML reports
-
-### Key Improvements
-- Refined regex patterns for better parsing accuracy
-- Enhanced CSS styling for protocol cards with consistent design
-- Fixed icon visibility issues and Unicode encoding problems
-- Improved error handling for malformed email headers
 
 ---
 
@@ -211,11 +204,11 @@ outlook.com
 # Select [3] and enter: C:\temp\domains.txt
 ```
 
-### 🎯 Mode 4: Email Header Analysis (Enhanced in v1.3)
+### 🎯 Mode 4: Email Header Analysis (Enhanced in v1.4)
 
 **Purpose**: Extract and analyze domains from email headers for DMARC compliance with enhanced Microsoft antispam parameter analysis
 
-**🆕 New Features in v1.3**:
+**🆕 Features Maintained in v1.4**:
 - Enhanced X-Microsoft-Antispam-Mailbox-Delivery header parsing
 - Individual parameter extraction: UCF, JMR, Dest, OFR
 - Protocol card visualization for antispam metrics
@@ -535,18 +528,35 @@ $Error | Format-List -Force
 | **Strength Assessment** | Cryptographic security | ≥1024-bit keys (2048-bit preferred) |
 | **TTL Validation** | DNS performance | ≥3600 seconds recommended |
 
-### Security Scoring System
+### Enhanced Security Scoring System (v1.4)
 
-**Score Calculation**:
-- Each check = 1 point
-- Total possible = 19 points
-- Percentage = (Passed Checks / Total Checks) × 100
+**🆕 Enhanced Point-Based Calculation**:
+- **SPF**: 40 points total (Record Present=8pts, Other 8 checks=4pts each)
+- **DMARC**: 30 points total (Each of 5 checks=6pts, **STRICT**: only p=reject gets full points)
+- **DKIM**: 30 points total (Each of 5 checks=6pts)
+- **Total Possible**: 100 points
 
-**Score Interpretation**:
-- **90-100%** (17-19 checks): Excellent ✅
-- **80-89%** (15-16 checks): Good ⚠️
-- **70-79%** (13-14 checks): Fair ⚠️
-- **Below 70%** (<13 checks): Needs Improvement ❌
+**🆕 Enhanced Score Interpretation (v1.4)**:
+| Score Range | Status | DMARC Requirement | Security Level |
+|-------------|---------|------------------|----------------|
+| **95-100** | 🏆 **Excellent** | **p=reject required** | Maximum security |
+| **80-94** | ✅ **Good** | Any policy | Strong security |
+| **60-79** | ⚠️ **Fair** | Any policy | Moderate security |
+| **40-59** | ❌ **Poor** | Any policy | Significant vulnerabilities |
+| **<40** | 🚨 **Critical** | Any policy | **Immediate action required** |
+
+**🔒 Key v1.4 Changes**:
+- **Strict DMARC Enforcement**: Only p=reject policy achieves maximum security rating
+- **Critical Status**: New category for scores below 40 requiring immediate attention
+- **Enhanced Weighting**: DMARC reject policy enforcement is now mandatory for "Excellent" status
+- **Security Focus**: Scoring emphasizes real-world protection effectiveness over configuration completeness
+
+**📊 DMARC Policy Scoring (Enhanced)**:
+- **p=reject**: Full points (40) - Maximum security
+- **p=quarantine**: Reduced points (20) - Moderate security
+- **p=none**: Minimal points (5) - Monitoring only
+
+**⚠️ Important**: Even with perfect SPF and DKIM (70 points), you cannot achieve "Excellent" status without DMARC p=reject policy.
 
 ### Microsoft Documentation Integration
 

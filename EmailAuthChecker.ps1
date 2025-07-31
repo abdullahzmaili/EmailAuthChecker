@@ -21,31 +21,30 @@
     4. Email Header Analysis - Extract and analyze domains from email headers (smtp.mailfrom and header.from fields)
     
     Features 19 comprehensive security checks:
-    - SPF (9 checks): Record presence, syntax, single record compliance, DNS lookups, length validation, TTL analysis, SPF enforcement rule, macro security, sub-record TTL
+    - SPF (9 checks): Record presence, syntax, single record compliance, DNS lookups, length validation, TTL analysis, SPF enforcement rule, macro security, sub-record TTL (A/MX/TXT)
     - DMARC (5 checks): Record presence, policy assessment, reporting configuration, alignment modes, TTL validation  
     - DKIM (5 checks): Selector discovery, syntax validation, key status analysis, strength assessment, TTL validation
 
 .NOTES
     File Name      : EmailAuthChecker.ps1
     Author         : Abdullah Zmaili
-    Version        : 1.3 (Enhanced DMARC Policy Strictness)
+    Version        : 1.4 
     Date Created   : 2025-July-16
-    Date Updated   : 2025-July-28
+    Date Updated   : 2025-July-31
     Prerequisite   : PowerShell 5.1 or later, Administrator privileges for some checks
     Total Checks   : 19 comprehensive validations across all email authentication protocols
     
-    CHANGELOG v1.3:
-    - Enhanced DMARC policy strictness: Only 'reject' policy is considered secure
-    - DMARC 'quarantine' and 'none' policies now treated as security weaknesses
-    - Revised scoring: reject=40pts, quarantine=20pts, none=5pts (vs. previous 40/30/15)
-    - Updated status thresholds: Excellent requires 95+ score AND DMARC reject policy
-    - Added 'Critical' status category for scores below 40
-    - Enhanced security-focused recommendations and warnings
+    CHANGELOG v1.4:
+    - Enhanced code organization with #region/#endregion comments
+    - Improved function documentation and maintainability
+    - Updated documentation suite with comprehensive guides
+    - Enhanced troubleshooting and example resources
+    - Refined error handling and user experience improvements
 #>
 
 # Email Authentication Checker with Microsoft Documentation Integration
 # Author: Abdullah Zmaili  
-# Version 1.3 - Enhanced DMARC Policy Strictness
+# Version 1.4
 # Checks SPF, DKIM, and DMARC records for domains and generates an HTML report with Microsoft official documentation links
 # Enhanced with authoritative DNS server queries for accurate TTL and record validation
 # NEW: Strict DMARC policy enforcement - only 'reject' policy achieves maximum security rating
@@ -66,6 +65,7 @@ $script:MSURLs = @{
 }
 
 # Enhanced UI Functions
+#region Show-Banner function
 function Show-Banner {
     Clear-Host
     $banner = @"
@@ -87,7 +87,7 @@ function Show-Banner {
 |    |  [SECURITY] Comprehensive Security Assessment & Recommendations |        |
 |    +------------------------------------------------------------------+       |
 |                                                                               |
-|                              Version 1.3 Enhanced                             |
+|                              Version 1.4 Enhanced                             |
 |                    [STRICT] Enhanced DMARC Policy Enforcement                 |
 |                          By Abdullah Zmaili - 2025                            |
 +===============================================================================+
@@ -95,8 +95,9 @@ function Show-Banner {
     Write-Host $banner -ForegroundColor Cyan
     Write-Host ""
 }
+#endregion
 
-# Helper function to parse DKIM records into key-value pairs
+#region Helper function to parse DKIM records into key-value pairs
 function ConvertFrom-DKIMRecord {
     param([string]$dkimRecord)
     
@@ -117,8 +118,9 @@ function ConvertFrom-DKIMRecord {
     
     return $tags
 }
+#endregion
 
-# Helper function to generate recommendations based on issue patterns
+#region Helper function to generate recommendations based on issue patterns
 function Get-Recommendation {
     param([string]$Issue, [string]$Protocol)
     
@@ -194,8 +196,9 @@ function Get-Recommendation {
         }
     }
 }
+#endregion
 
-# Function to count DNS lookups in SPF record
+#region Function to count DNS lookups in SPF record
 function Get-SPFDNSLookupCount {
     param([string]$spfRecord)
     
@@ -221,8 +224,9 @@ function Get-SPFDNSLookupCount {
     
     return $lookupCount
 }
+#endregion
 
-# Function to validate SPF record syntax
+#region Function to validate SPF record syntax
 function Test-SPFSyntax {
     param([string]$spfRecord)
     
@@ -308,8 +312,9 @@ function Test-SPFSyntax {
     
     return $syntaxIssues
 }
+#endregion
 
-# Function to validate DKIM record syntax
+#region Function to validate DKIM record syntax
 function Test-DKIMSyntax {
     param([string]$dkimRecord, [string]$selector)
     
@@ -430,10 +435,9 @@ function Test-DKIMSyntax {
     
     return $syntaxIssues
 }
+#endregion
 
-
-
-# Function to detect DKIM service providers
+#region Function to detect DKIM service providers
 function Get-DKIMServiceProvider {
     param([hashtable]$dkimRecords, [string]$domain)
     
@@ -524,8 +528,9 @@ function Get-DKIMServiceProvider {
     
     return $providerInfo
 }
+#endregion
 
-# Function to extract and analyze SPF all mechanism
+#region Function to extract and analyze SPF all mechanism
 function Get-SPFAllMechanism {
     param([string]$spfRecord)
     
@@ -541,8 +546,9 @@ function Get-SPFAllMechanism {
         return ""
     }
 }
+#endregion
 
-# Function to check for multiple SPF records (RFC violation)
+#region Function to check for multiple SPF records (RFC violation)
 function Test-MultipleSPFRecords {
     param([string]$domain)
     
@@ -567,8 +573,9 @@ function Test-MultipleSPFRecords {
     
     return $multipleRecordIssues
 }
+#endregion
 
-# Function to validate SPF macros and check for security issues
+#region Function to validate SPF macros and check for security issues
 function Test-SPFMacroSecurity {
     param([string]$spfRecord)
     
@@ -664,8 +671,9 @@ function Test-SPFMacroSecurity {
     
     return $macroSecurityIssues
 }
+#endregion
 
-# Function to check TTL for SPF sub-records (A records referenced in SPF)
+#region Function to check TTL for SPF sub-records (A records referenced in SPF)
 function Test-SPFSubRecordsTTL {
     param([string]$spfRecord, [string]$domain)
     
@@ -697,6 +705,40 @@ function Test-SPFSubRecordsTTL {
         # Check for mx mechanism without domain (uses current domain)
         elseif ($mechanism -match '^[+\-~?]?mx(/\d+)?$') {
             $domainToCheck = $domain
+        }
+        # Check for include: mechanisms (NEW - check TXT record TTL)
+        elseif ($mechanism -match '^[+\-~?]?include:([^/\s]+)') {
+            $includeDomain = $matches[1]
+            
+            # Skip if already checked
+            if ($includeDomain -in $checkedRecords) {
+                continue
+            }
+            
+            $checkedRecords += $includeDomain
+            
+            try {
+                # Check TXT records for the included domain against authoritative servers
+                $authServers = Get-AuthoritativeDNSServers $includeDomain
+                $txtRecords = Resolve-DnsNameAuthoritative -Name $includeDomain -Type TXT -AuthoritativeServers $authServers
+                
+                if ($txtRecords) {
+                    foreach ($txtRecord in $txtRecords) {
+                        # Only check SPF records (those starting with "v=spf1")
+                        if ($txtRecord.Strings -match '^v=spf1\b') {
+                            if ($txtRecord.TTL -lt 3600) {
+                                $subRecordIssues += "TXT record (SPF) for include domain '$includeDomain' has low TTL ($($txtRecord.TTL) seconds) - recommend 3600+ seconds for stability"
+                            }
+                        }
+                    }
+                } else {
+                    $subRecordIssues += "TXT record for include domain '$includeDomain' not found or inaccessible - SPF validation may fail"
+                }
+                
+            } catch {
+                $subRecordIssues += "Error checking TXT records for include domain '$includeDomain': $($_.Exception.Message)"
+            }
+            continue
         }
         
         # Skip if no domain to check or already checked
@@ -744,8 +786,9 @@ function Test-SPFSubRecordsTTL {
     
     return $subRecordIssues
 }
+#endregion
 
-# Function to collect TTL values for SPF sub-records (A/MX records referenced in SPF)
+#region Function to collect TTL values for SPF sub-records (A/MX/TXT records referenced in SPF)
 function Get-SPFSubRecordsTTLValues {
     param([string]$spfRecord, [string]$domain)
     
@@ -783,6 +826,43 @@ function Get-SPFSubRecordsTTLValues {
             $domainToCheck = $domain
             $recordType = "MX"
         }
+        # Check for include: mechanisms (NEW - collect TXT record TTL)
+        elseif ($mechanism -match '^[+\-~?]?include:([^/\s]+)') {
+            $includeDomain = $matches[1]
+            
+            # Skip if already checked
+            if ($includeDomain -in $checkedRecords) {
+                continue
+            }
+            
+            $checkedRecords += $includeDomain
+            
+            try {
+                # Check TXT records for the included domain against authoritative servers
+                $authServers = Get-AuthoritativeDNSServers $includeDomain
+                $txtRecords = Resolve-DnsNameAuthoritative -Name $includeDomain -Type TXT -AuthoritativeServers $authServers
+                
+                if ($txtRecords) {
+                    $ttlValues = @()
+                    foreach ($txtRecord in $txtRecords) {
+                        # Only collect SPF records (those starting with "v=spf1")
+                        if ($txtRecord.Strings -match '^v=spf1\b') {
+                            $spfContent = ($txtRecord.Strings -join '')
+                            $ttlValues += "${spfContent}: $($txtRecord.TTL)s"
+                        }
+                    }
+                    if ($ttlValues.Count -gt 0) {
+                        $subRecordTTLValues["$includeDomain (TXT-SPF)"] = $ttlValues -join ", "
+                    }
+                } else {
+                    $subRecordTTLValues["$includeDomain (TXT-SPF Error)"] = "TXT record not found or inaccessible"
+                }
+                
+            } catch {
+                $subRecordTTLValues["$includeDomain (TXT-SPF Error)"] = "Unable to retrieve TTL: $($_.Exception.Message)"
+            }
+            continue
+        }
         
         # Skip if no domain to check or already checked
         if (-not $domainToCheck -or $domainToCheck -in $checkedRecords) {
@@ -800,7 +880,10 @@ function Get-SPFSubRecordsTTLValues {
                 if ($aRecords) {
                     $ttlValues = @()
                     foreach ($aRecord in $aRecords) {
-                        $ttlValues += "$($aRecord.IPAddress): $($aRecord.TTL)s"
+                        # Only add entries with valid IP addresses
+                        if (-not [string]::IsNullOrWhiteSpace($aRecord.IPAddress)) {
+                            $ttlValues += "$($aRecord.IPAddress): $($aRecord.TTL)s"
+                        }
                     }
                     if ($ttlValues.Count -gt 0) {
                         $subRecordTTLValues["$domainToCheck (A)"] = $ttlValues -join ", "
@@ -816,7 +899,10 @@ function Get-SPFSubRecordsTTLValues {
                 if ($mxRecords) {
                     $ttlValues = @()
                     foreach ($mxRecord in $mxRecords) {
-                        $ttlValues += "$($mxRecord.NameExchange) (Priority: $($mxRecord.Preference)): $($mxRecord.TTL)s"
+                        # Only add entries with valid NameExchange values
+                        if (-not [string]::IsNullOrWhiteSpace($mxRecord.NameExchange)) {
+                            $ttlValues += "$($mxRecord.NameExchange) (Priority: $($mxRecord.Preference)): $($mxRecord.TTL)s"
+                        }
                     }
                     if ($ttlValues.Count -gt 0) {
                         $subRecordTTLValues["$domainToCheck (MX)"] = $ttlValues -join ", "
@@ -831,9 +917,9 @@ function Get-SPFSubRecordsTTLValues {
     
     return $subRecordTTLValues
 }
+#endregion
 
-# Function to extract DKIM all mechanism (if present)
-# Function to extract DKIM key length from public key
+#region Function to extract DKIM key length from public key
 function Get-DKIMKeyLength {
     param([string]$dkimRecord)
     
@@ -968,8 +1054,9 @@ function Get-DKIMKeyLength {
         }
     }
 }
+#endregion
 
-# Helper function to get DKIM key status
+#region Helper function to get DKIM key status
 function Get-DKIMKeyStatus {
     param([string]$dkimRecord)
     
@@ -996,8 +1083,9 @@ function Get-DKIMKeyStatus {
     
     return "UNKNOWN"
 }
+#endregion
 
-# Function to get authoritative DNS servers and their IP addresses for a domain
+#region Function to get authoritative DNS servers and their IP addresses for a domain
 function Get-AuthoritativeDNSServers {
     param([string]$domain)
     
@@ -1058,8 +1146,9 @@ function Get-AuthoritativeDNSServers {
     
     return $authServers
 }
+#endregion
 
-# Function to perform DNS query against authoritative servers
+#region Function to perform DNS query against authoritative servers
 function Resolve-DnsNameAuthoritative {
     param(
         [string]$Name,
@@ -1126,7 +1215,9 @@ function Resolve-DnsNameAuthoritative {
     
     return $results
 }
+#endregion
 
+#region Function to validate domain name format
 function Test-DomainFormat {
     param(
         [string]$DomainName,
@@ -1186,8 +1277,9 @@ function Test-DomainFormat {
     
     return $true
 }
+#endregion
 
-# Function to analyze Authentication-Results for DMARC Pass check
+#region Function to analyze Authentication-Results for DMARC Pass check
 function Get-AuthenticationResults {
     param([string]$HeaderContent)
     
@@ -1380,8 +1472,9 @@ function Get-AuthenticationResults {
     
     return $authResults
 }
+#endregion
 
-# Function to parse email headers and extract domains from smtp.mailfrom and header.from
+#region Function to parse email headers and extract domains from smtp.mailfrom and header.from
 function Get-DomainsFromEmailHeaders {
     param([string]$FilePath)
     
@@ -1632,7 +1725,7 @@ function Get-DomainsFromEmailHeaders {
         return @()
     }
 }
-
+#endregion
 
 #region Function to calculate check percentages for donut charts
 function Get-ProtocolCheckPercentage {
@@ -1705,7 +1798,7 @@ function Get-ProtocolCheckPercentage {
 }
 #endregion
 
-# Function to generate enhanced interactive segmented donut chart SVG
+#region Function to generate enhanced interactive segmented donut chart SVG
 function New-SegmentedDonutChart {
     param($checks, $protocol)
     
@@ -1774,8 +1867,9 @@ function New-SegmentedDonutChart {
     
     return $svg
 }
+#endregion
 
-# Function to get individual check results for segmented charts
+#region Function to get individual check results for segmented charts
 function Get-ProtocolCheckDetails {
     param($result, $protocol)
     
@@ -1915,8 +2009,9 @@ function Get-ProtocolCheckDetails {
     
     return $checks
 }
+#endregion
 
-# Function to get explanation for authentication reason codes
+#region Function to get explanation for authentication reason codes
 function Get-ReasonCodeExplanation {
     param(
         [string]$ReasonCode
@@ -1963,10 +2058,10 @@ function Get-ReasonCodeExplanation {
     # Return empty string if no pattern matches
     return ""
 }
+#endregion
 
-
-    # Show enhanced banner at script start
-    Show-Banner
+# Show enhanced banner at script start
+Show-Banner
 
 
 
@@ -2105,8 +2200,8 @@ function Get-ReasonCodeExplanation {
             DKIMSyntaxIssues = @{}  # Dictionary to store selector -> issues mapping
             SPFMultipleRecordsCheck = $true  # New check for multiple SPF records
             SPFMacroSecurityCheck = $true  # New check for SPF macro security
-            SPFSubRecordsTTLCheck = $true  # New check for TTL of sub-records (A/MX records referenced in SPF)
-            SPFSubRecordsTTLValues = @{}  # Dictionary to store domain -> TTL values for A/MX records referenced in SPF
+            SPFSubRecordsTTLCheck = $true  # New check for TTL of sub-records (A/MX/TXT records referenced in SPF)
+            SPFSubRecordsTTLValues = @{}  # Dictionary to store domain -> TTL values for A/MX/TXT records referenced in SPF
             # Email Header Analysis Results (for option 4)
             EmailHeaderSPFResult = ""
             EmailHeaderDKIMResult = ""
@@ -4752,17 +4847,16 @@ foreach ($result in $allResults) {
         }
         .record-value-text {
             font-family: 'Courier New', monospace;
-            font-size: 11px;
+            font-size: 12px;
             word-break: break-all;
             word-wrap: break-word;
             overflow-wrap: break-word;
             line-height: 1.6;
-            max-height: 80px;
+            max-height: 200px;
             overflow-y: auto;
             padding: 8px;
             background: #f8f9fa;
             border-radius: 4px;
-            white-space: pre-wrap;
             width: 100%;
             max-width: 100%;
             box-sizing: border-box;
@@ -5071,7 +5165,7 @@ foreach ($result in $allResults) {
                 'Record Present': 'Checks if the DNS record exists for this domain',
                 'Single Record': 'Ensures only one SPF record exists (RFC requirement)',
                 'Macro Security': 'Validates safe usage of SPF macros',
-                'TTL Sub-Records': 'Verifies TTL values for A/MX records referenced in SPF',
+                'TTL Sub-Records': 'Verifies TTL values for A/MX/TXT records referenced in SPF (includes A, MX, and include mechanisms)',
                 'DNS Lookups < 10': 'SPF records must not exceed 10 DNS lookups',
                 'Record Length < 255': 'DNS TXT records have a 255 character limit',
                 'TTL >= 3600': 'Minimum recommended TTL for DNS stability',
@@ -5338,9 +5432,69 @@ $(if($result.SPFSubRecordsTTLValues -and $result.SPFSubRecordsTTLValues.Count -g
                             <span class='detail-label'>Sub-Record TTL Details:</span>
                             <div class='record-value-container'>
                                 <div class='record-value-header'>
-                                    <span style='font-size: 11px; color: #6c757d;'>A/MX record TTL values referenced in SPF</span>
+                                    <span style='font-size: 11px; color: #6c757d;'>A/MX/TXT record TTL values referenced in SPF</span>
                                 </div>
-                                <div class='record-value-text'>$(($result.SPFSubRecordsTTLValues.GetEnumerator() | ForEach-Object { "<strong>$($_.Key):</strong> $($_.Value)" }) -join "<br>")</div>
+                                <div class='record-value-text'>
+                                    <table style='width: 100%; border-collapse: collapse; margin-top: 10px; font-size: 0.85em; table-layout: fixed;'>
+                                        <colgroup>
+                                            <col style='width: 30%;'>
+                                            <col style='width: 55%;'>
+                                            <col style='width: 15%;'>
+                                        </colgroup>
+                                        <thead>
+                                            <tr style='background-color: #f8f9fa; border-bottom: 2px solid #dee2e6;'>
+                                                <th style='padding: 8px 12px; text-align: left; font-weight: 600; color: #495057; border: 1px solid #dee2e6;'>Record Name</th>
+                                                <th style='padding: 8px 12px; text-align: left; font-weight: 600; color: #495057; border: 1px solid #dee2e6;'>Value</th>
+                                                <th style='padding: 8px 12px; text-align: left; font-weight: 600; color: #495057; border: 1px solid #dee2e6;'>TTL</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody>
+$(
+    $tableRows = @()
+    foreach($kvp in $result.SPFSubRecordsTTLValues.GetEnumerator()) {
+        $recordName = $kvp.Key
+        $recordData = $kvp.Value
+        
+        # Parse the record data - it can contain multiple entries separated by commas
+        $entries = $recordData -split ', '
+        
+        foreach($entry in $entries) {
+            # Extract value and TTL from each entry
+            if($entry -match '^(.+?):\s*(\d+s?)$') {
+                $recordValue = $matches[1].Trim()
+                $ttlValue = $matches[2].Trim()
+                
+                # Determine row background color based on TTL value
+                $ttlNumeric = ($ttlValue -replace 's', '') -as [int]
+                $rowStyle = if($ttlNumeric -lt 3600) { 
+                    'background-color: #fff3cd; border: 1px solid #ffeaa7;' 
+                } else { 
+                    'background-color: #ffffff; border: 1px solid #dee2e6;' 
+                }
+                
+                $tableRows += "                                            <tr style='$rowStyle'>
+                                                <td style='padding: 6px 12px; border: 1px solid #dee2e6; word-wrap: break-word; overflow-wrap: break-word;'><strong>$recordName</strong></td>
+                                                <td style='padding: 6px 12px; border: 1px solid #dee2e6; word-wrap: break-word; overflow-wrap: break-word; font-family: monospace; font-size: 0.9em; white-space: pre-wrap;'>$recordValue</td>
+                                                <td style='padding: 6px 12px; border: 1px solid #dee2e6; text-align: center; font-weight: 500; white-space: nowrap;'>$ttlValue</td>
+                                            </tr>"
+            } else {
+                # Handle cases where the format doesn't match expected pattern
+                $tableRows += "                                            <tr style='background-color: #f8d7da; border: 1px solid #f5c6cb;'>
+                                                <td style='padding: 6px 12px; border: 1px solid #dee2e6; word-wrap: break-word; overflow-wrap: break-word;'><strong>$recordName</strong></td>
+                                                <td style='padding: 6px 12px; border: 1px solid #dee2e6; word-wrap: break-word; overflow-wrap: break-word; font-family: monospace; font-size: 0.9em; white-space: pre-wrap;'>$entry</td>
+                                                <td style='padding: 6px 12px; border: 1px solid #dee2e6; text-align: center; color: #721c24; white-space: nowrap;'>N/A</td>
+                                            </tr>"
+            }
+        }
+    }
+    $tableRows -join "`n"
+)
+                                        </tbody>
+                                    </table>
+                                    <div style='margin-top: 8px; font-size: 0.75em; color: #6c757d;'>
+                                        <span style='display: inline-block; width: 12px; height: 12px; background-color: #fff3cd; border: 1px solid #ffeaa7; margin-right: 5px;'></span>Yellow background indicates TTL &lt; 3600 seconds
+                                    </div>
+                                </div>
                             </div>
                         </div>"
 })
@@ -5943,11 +6097,11 @@ $(if($result.EmailHeaderAntispamOFR) {
                                 </div>
                                 
                                 <div class="alignment-status-modern">
-                                    <div class="alignment-result-modern $(if($result.EmailHeaderDMARCPass -eq 'Yes'){'alignment-pass-modern'}else{'alignment-fail-modern'})">
-                                        <span class="alignment-icon-modern">$(if($result.EmailHeaderDMARCPass -eq 'Yes'){'&#10003;'}else{'&#10007;'})</span>
+                                    <div class="alignment-result-modern $(if($result.EmailHeaderHeaderFrom -and $result.EmailHeaderSMTPMailFrom -and $result.EmailHeaderHeaderFrom.ToLower() -eq $result.EmailHeaderSMTPMailFrom.ToLower()){'alignment-pass-modern'}else{'alignment-fail-modern'})">
+                                        <span class="alignment-icon-modern">$(if($result.EmailHeaderHeaderFrom -and $result.EmailHeaderSMTPMailFrom -and $result.EmailHeaderHeaderFrom.ToLower() -eq $result.EmailHeaderSMTPMailFrom.ToLower()){'&#10003;'}else{'&#10007;'})</span>
                                         <div class="alignment-text-container">
-                                            <span class="alignment-label-modern">$(if($result.EmailHeaderDMARCPass -eq 'Yes'){'Properly Aligned'}else{'Not Aligned'})</span>
-                                            <span class="alignment-detail">$(if($result.EmailHeaderDMARCPass -eq 'Yes'){'Domains match requirements'}else{'Domain mismatch detected'})</span>
+                                            <span class="alignment-label-modern">$(if($result.EmailHeaderHeaderFrom -and $result.EmailHeaderSMTPMailFrom -and $result.EmailHeaderHeaderFrom.ToLower() -eq $result.EmailHeaderSMTPMailFrom.ToLower()){'Properly Aligned'}else{'Not Aligned'})</span>
+                                            <span class="alignment-detail">$(if($result.EmailHeaderHeaderFrom -and $result.EmailHeaderSMTPMailFrom -and $result.EmailHeaderHeaderFrom.ToLower() -eq $result.EmailHeaderSMTPMailFrom.ToLower()){'Domains match exactly'}else{if($result.EmailHeaderHeaderFrom -and $result.EmailHeaderSMTPMailFrom){'Domain mismatch detected'}else{'Missing domain information'}})</span>
                                         </div>
                                     </div>
                                 </div>
@@ -6100,22 +6254,36 @@ $(if($result.EmailHeaderAntispamOFR) {
             
         </div>
 "@
-        
+            
+    }
+
+    # Add consolidated recommendations and footer sections after all domains
+    $html += "        </div>"  # Close content div
+    
+    # Collect all unique recommendations from all domains
+    $allRecommendations = @()
+    foreach ($result in $allResults) {
+        foreach ($recommendation in $result.Recommendations) {
+            if ($allRecommendations -notcontains $recommendation) {
+                $allRecommendations += $recommendation
+            }
+        }
+    }
+    
+    # Add recommendations section (appears only once)
     $html += "        <div class='recommendations'>"
     $html += "            <h4>&#128295; Action Items &amp; Microsoft Documentation</h4>"
     $html += "            <ul>"
     
-    foreach ($recommendation in $result.Recommendations) {
+    foreach ($recommendation in $allRecommendations) {
         # Format recommendations with proper HTML links
         $formattedRec = $recommendation -replace "(https://[^\s]+)", '<a href="$1" target="_blank">$1</a>'
         $html += "                <li>$formattedRec</li>"
     }
     $html += "            </ul>"
     $html += "        </div>"
-    $html += "    </div>"
- 
 
-    # Close HTML document
+    # Add microsoft-resources section (appears only once)
     $html += '        <div class="microsoft-resources">'
     $html += "            <h4>&#128218; Microsoft Official Documentation</h4>"
     $html += "            <ul>"
@@ -6126,7 +6294,8 @@ $(if($result.EmailHeaderAntispamOFR) {
     $html += '                <li><strong>Exchange Online Protection:</strong> <a href="https://docs.microsoft.com/microsoft-365/security/office-365-security/exchange-online-protection-overview" target="_blank">Exchange Online Protection (EOP) overview</a></li>'
     $html += "            </ul>"
     $html += "        </div>"
-    $html += ""
+
+    # Add footer section with "Understanding Your Results" (appears only once)
     $html += '    <div class="footer">'
     $html += "        <h3>&#128202; Understanding Your Results</h3>"
     $html += '        <div style="background: linear-gradient(135deg, #f8f9fa 0%, #e9ecef 100%); border: 1px solid #dee2e6; border-radius: 10px; padding: 20px; margin: 20px 0;">'
@@ -6171,14 +6340,12 @@ $(if($result.EmailHeaderAntispamOFR) {
     $html += "        </div>"
     $html += '        <hr style="margin: 25px 0; border: none; border-top: 1px solid #ddd;">'
     $html += '        <p style="color: #888; font-size: 0.9em;">'
-    $html += "            &#128231; Email Authentication Checker v1.4 (Granular Scoring) | Generated on $reportDate at $(Get-Date -Format 'HH:mm:ss')"
+    $html += "            &#128231; Email Authentication Checker v1.4 (Enhanced Antispam Analysis) | Generated on $reportDate at $(Get-Date -Format 'HH:mm:ss')"
     $html += "        </p>"
     $html += "    </div>"
     $html += "    </div>"
     $html += "</body>"
     $html += "</html>"
-
-    }
 
     # Save HTML report to selected location (moved outside the foreach loop)
     $reportFileName = "Email-Auth-Report-$fileTimestamp.html"
@@ -6205,7 +6372,10 @@ $(if($result.EmailHeaderAntispamOFR) {
     if ($openChoice -eq 'y' -or $openChoice -eq 'Y' -or $openChoice -eq 'yes') {
         Start-Process $reportPath
         Write-Host "Opening report in your default browser..." -ForegroundColor Green
-        exit  # Exit the script after opening the report
+        Write-Host ""
+        Write-Host "Thank you for using Email Authentication Checker with Microsoft Documentation!" -ForegroundColor Green
+        Write-Host "============================================" -ForegroundColor Cyan
+        return  # Exit the script only, keep PowerShell window open
     }
 
     Write-Host ""
