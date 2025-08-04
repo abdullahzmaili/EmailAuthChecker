@@ -281,9 +281,8 @@ This script has been thoroughly tested across various environments and scenarios
 ## 👨‍💻 Author & Credits
 
 **Author**: Abdullah Zmaili  
-**Version**: 1.4 (Enhanced DMARC Policy Strictness)  
+**Version**: 1.4
 **Date**: July 2025  
-**Contact**: [Your Contact Information]
 
 ### Acknowledgments
 - Microsoft Security Team for documentation and best practices
@@ -606,3 +605,4 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 **⭐ Star this repository if you find it helpful!**
 
 *Made with ❤️ for email security professionals*
+
